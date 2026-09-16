@@ -3,8 +3,11 @@ package ipmap
 import (
 	"bufio"
 	"bytes"
+	"hash/crc64"
+	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -110,10 +113,48 @@ func corpusRun(t *testing.T, path, expect string) {
 		}
 	}
 
-	// The exhaustive pass: re-stream the file and verify every line — every
-	// unique address appears as at least one line, so this covers all keys
-	// with no test-side table. A sample once passed a store that was wrong
-	// for 45 keys in 10^8.
+	// Through the artifact: write it, open it, and require the re-serialisation
+	// of the opened map to hash identically to the file — accepted implies
+	// canonical, at corpus scale.
+	start = time.Now()
+	ap := filepath.Join(t.TempDir(), "corpus.ipmap")
+	af, err := os.Create(ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h1 := crc64.New(crc64.MakeTable(crc64.ECMA))
+	size, err := m.WriteTo(io.MultiWriter(af, h1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := af.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrote := time.Since(start)
+	start = time.Now()
+	opened, err := Open(ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	openT := time.Since(start)
+	h2 := crc64.New(crc64.MakeTable(crc64.ECMA))
+	if _, err := opened.WriteTo(h2); err != nil {
+		t.Fatal(err)
+	}
+	if h1.Sum64() != h2.Sum64() {
+		t.Fatal("the opened artifact does not re-serialise identically")
+	}
+	if opened.Stats() != m.Stats() {
+		t.Fatalf("stats changed through the file: %+v vs %+v", opened.Stats(), m.Stats())
+	}
+	t.Logf("artifact: %d bytes, written in %s, opened+verified in %s", size, wrote.Round(time.Millisecond), openT.Round(time.Millisecond))
+
+	// The exhaustive pass: re-stream the input and verify every line against
+	// the FILE-backed map — every unique address appears as at least one line,
+	// so this covers all keys with no test-side table. A sample once passed a
+	// store that was wrong for 45 keys in 10^8. The built map is probed too:
+	// the two must agree everywhere.
 	start = time.Now()
 	var checked int
 	var dst [testValLen]byte
@@ -121,16 +162,19 @@ func corpusRun(t *testing.T, path, expect string) {
 		a, _ := parseAny(line)
 		a = a.Unmap()
 		salt := tracked[a] // zero for untracked, by construction
-		got, ok := m.Lookup(a)
+		got, ok := opened.Lookup(a)
 		if !ok || !bytes.Equal(got, valC(a, salt)) {
-			t.Fatalf("Lookup(%v) = %x,%v; want %x", a, got, ok, valC(a, salt))
+			t.Fatalf("opened Lookup(%v) = %x,%v; want %x", a, got, ok, valC(a, salt))
 		}
-		if !m.LookupInto(a, dst[:]) || !bytes.Equal(dst[:], got) {
+		if built, bok := m.Lookup(a); !bok || !bytes.Equal(built, got) {
+			t.Fatalf("built and opened maps disagree at %v", a)
+		}
+		if !opened.LookupInto(a, dst[:]) || !bytes.Equal(dst[:], got) {
 			t.Fatalf("LookupInto(%v) disagrees with Lookup", a)
 		}
 		checked++
 	})
-	t.Logf("exhaustive: %d lookups verified in %s", checked, time.Since(start).Round(time.Millisecond))
+	t.Logf("exhaustive through the artifact: %d lookups verified in %s", checked, time.Since(start).Round(time.Millisecond))
 }
 
 func scan(t *testing.T, path string, fn func(line []byte)) {

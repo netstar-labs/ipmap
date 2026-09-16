@@ -1,8 +1,8 @@
 # ipmap — user guide
 
-> **Under construction.** This describes the interfaces as designed. Where something is not yet
-> built it says so rather than reading as though it were — see [roadmap](roadmap.md) for the
-> phase each piece belongs to.
+> **Under construction.** The library — build, lookup, interning, the artifact — is implemented
+> and verified; the CLI is not yet. See [roadmap](roadmap.md) for the phase each piece belongs
+> to, and treat the API as unstable until the public release.
 
 ## Install
 
@@ -22,9 +22,10 @@ import "github.com/netstar-labs/ipmap"
 ### Building
 
 ```go
-b := ipmap.NewBuilder(ipmap.Options{ValLen: 4, Intern: true})   // not yet implemented
-b.Add(addr, val)                                               // any family; routed internally
-_, err := b.WriteTo(f)                                          // one artifact, both families
+b := ipmap.NewBuilder(ipmap.Options{ValLen: 4, Intern: true})
+b.Add(addr, val)          // any family; routed internally
+m, err := b.Build()       // an immutable, queryable Map
+_, err = m.WriteTo(f)     // one artifact, both families
 ```
 
 `ValLen` is fixed for the life of the artifact: every address carries a value of exactly that
@@ -68,6 +69,8 @@ served: answering from a format or a byte range it does not understand is worse 
 answering.
 
 ## The CLI
+
+Designed, **not implemented yet** (roadmap P6):
 
 ```
 ipmap build  -in <spec> -out <artifact>    compile a text spec into an artifact

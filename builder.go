@@ -109,7 +109,7 @@ func (b *Builder) Build() (*Map, error) {
 	}
 	b.built = true
 
-	m := &Map{valLen: b.opt.ValLen}
+	m := &Map{valLen: b.opt.ValLen, epoch: nowEpoch()}
 	if b.opt.Intern {
 		m.stats.Distinct = len(b.byVal)
 	}
