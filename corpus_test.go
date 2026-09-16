@@ -29,6 +29,24 @@ func TestCorpusExhaustive(t *testing.T) {
 	t.Run("v6", func(t *testing.T) { corpusRun(t, os.Getenv("IPMAP_CORPUS6"), os.Getenv("IPMAP_EXPECT6")) })
 }
 
+// valC derives a deliberately low-cardinality value (≤65536 per salt) so the
+// interned path is what the corpus actually exercises: high-entropy values
+// would make every value distinct, which tests nothing the direct layout did
+// not already cover — and the dedupe map would rival the store for memory.
+func valC(a netip.Addr, salt byte) []byte {
+	b := a.As16()
+	var h uint16
+	for i, c := range b {
+		h = h*31 + uint16(c) + uint16(i)
+	}
+	out := make([]byte, testValLen)
+	for i := range out {
+		out[i] = byte(h>>(8*(i%2))) + byte(i)*7 + salt
+	}
+	out[0] |= 1
+	return out
+}
+
 func corpusRun(t *testing.T, path, expect string) {
 	if path == "" {
 		t.Skip("not set")
@@ -40,7 +58,7 @@ func corpusRun(t *testing.T, path, expect string) {
 	const trackCap = 2_000_000
 	tracked := make(map[netip.Addr]byte, trackCap)
 
-	b := NewBuilder(Options{ValLen: testValLen})
+	b := NewBuilder(Options{ValLen: testValLen, Intern: true})
 	var lines, conflicts int
 	start := time.Now()
 	scan(t, path, func(line []byte) {
@@ -59,7 +77,7 @@ func corpusRun(t *testing.T, path, expect string) {
 		} else if len(tracked) < trackCap {
 			tracked[a] = 0
 		}
-		if err := b.Add(a, val(a, salt)); err != nil {
+		if err := b.Add(a, valC(a, salt)); err != nil {
 			t.Fatal(err)
 		}
 		lines++
@@ -70,8 +88,8 @@ func corpusRun(t *testing.T, path, expect string) {
 	}
 	st := m.Stats()
 	unique := st.Addrs4 + st.Addrs6
-	t.Logf("built %d lines → %d unique in %s (dups=%d conflicts=%d)",
-		lines, unique, time.Since(start).Round(time.Millisecond), st.Dups, st.DupConflicts)
+	t.Logf("built %d lines → %d unique in %s (dups=%d conflicts=%d, interned %d distinct values)",
+		lines, unique, time.Since(start).Round(time.Millisecond), st.Dups, st.DupConflicts, st.Distinct)
 
 	if st.Dups != lines-unique {
 		t.Fatalf("Dups = %d, want lines-unique = %d", st.Dups, lines-unique)
@@ -104,8 +122,8 @@ func corpusRun(t *testing.T, path, expect string) {
 		a = a.Unmap()
 		salt := tracked[a] // zero for untracked, by construction
 		got, ok := m.Lookup(a)
-		if !ok || !bytes.Equal(got, val(a, salt)) {
-			t.Fatalf("Lookup(%v) = %x,%v; want %x", a, got, ok, val(a, salt))
+		if !ok || !bytes.Equal(got, valC(a, salt)) {
+			t.Fatalf("Lookup(%v) = %x,%v; want %x", a, got, ok, valC(a, salt))
 		}
 		if !m.LookupInto(a, dst[:]) || !bytes.Equal(dst[:], got) {
 			t.Fatalf("LookupInto(%v) disagrees with Lookup", a)

@@ -36,14 +36,28 @@ func (o oracle) add(a netip.Addr, v []byte) { o[a.Unmap()] = v }
 // sparse groups, both families, duplicate addresses with agreeing and
 // conflicting values.
 func buildRandom(t testing.TB, seed uint64, n int) (*Map, oracle) {
+	return buildRandomOpt(t, seed, n, Options{ValLen: testValLen})
+}
+
+// spy, when given, observes every Add — the hook that lets a test compute an
+// independent count of whatever the store also claims to count.
+func buildRandomOpt(t testing.TB, seed uint64, n int, opt Options, spy ...func(netip.Addr, []byte)) (*Map, oracle) {
 	t.Helper()
 	r := rand.New(rand.NewPCG(seed, seed^0xdead))
-	b := NewBuilder(Options{ValLen: testValLen})
+	b := NewBuilder(opt)
 	o := oracle{}
 
+	var order []netip.Addr // insertion order: map iteration is randomized, and a
+	// generator that samples from it produces different adds on identical seeds
 	add := func(a netip.Addr, v []byte) {
 		if err := b.Add(a, v); err != nil {
 			t.Fatalf("Add(%v): %v", a, err)
+		}
+		for _, fn := range spy {
+			fn(a, v)
+		}
+		if _, dup := o[a.Unmap()]; !dup {
+			order = append(order, a.Unmap())
 		}
 		o.add(a, v)
 	}
@@ -70,17 +84,14 @@ func buildRandom(t testing.TB, seed uint64, n int) (*Map, oracle) {
 		}
 	}
 	// Duplicates: re-add a sample with the same value, and a sample with a
-	// conflicting one; the map oracle applies last-wins by assignment.
-	keys := make([]netip.Addr, 0, len(o))
-	for k := range o {
-		keys = append(keys, k)
-	}
-	for i := 0; i < len(keys)/10; i++ {
-		k := keys[r.IntN(len(keys))]
+	// conflicting one; the map oracle applies last-wins by assignment. Sampling
+	// uses insertion order, so identical seeds produce identical add sequences.
+	for i := 0; i < len(order)/10; i++ {
+		k := order[r.IntN(len(order))]
 		add(k, o[k]) // same value again
 	}
-	for i := 0; i < len(keys)/10; i++ {
-		k := keys[r.IntN(len(keys))]
+	for i := 0; i < len(order)/10; i++ {
+		k := order[r.IntN(len(order))]
 		add(k, val(k, 7)) // a conflicting value; last-wins makes it the answer
 	}
 
@@ -193,7 +204,15 @@ func TestBoundaryAddresses(t *testing.T) {
 // and a 4-in-6 spelling collides with its unmapped twin, because they are the
 // same host.
 func TestDuplicateRule(t *testing.T) {
-	b := NewBuilder(Options{ValLen: 1})
+	for _, opt := range []Options{{ValLen: 1}, {ValLen: 1, Intern: true}} {
+		t.Run(map[bool]string{false: "direct", true: "interned"}[opt.Intern], func(t *testing.T) {
+			testDuplicateRule(t, opt)
+		})
+	}
+}
+
+func testDuplicateRule(t *testing.T, opt Options) {
+	b := NewBuilder(opt)
 	a := netip.MustParseAddr("192.0.2.7")
 	mapped := netip.MustParseAddr("::ffff:192.0.2.7")
 	check := func(err error) {
@@ -323,8 +342,8 @@ func TestBuilderMisuse(t *testing.T) {
 		}()
 		NewBuilder(Options{ValLen: 0})
 	}()
-	if _, err := NewBuilder(Options{ValLen: 2, Intern: true}).Build(); err == nil {
-		t.Fatal("Intern silently ignored; it must error until implemented")
+	if _, err := NewBuilder(Options{ValLen: 2, Intern: true}).Build(); err != nil {
+		t.Fatalf("Intern on an empty builder: %v", err)
 	}
 }
 

@@ -13,15 +13,24 @@ import (
 // panics rather than quietly building from stale state.
 type Builder struct {
 	opt   Options
-	v4    []uint64 // address<<32 | value index: sorting the word sorts by address
+	v4    []uint64 // address<<32 | sequence: sorting the word sorts by address
 	v6    []entry6
-	vals  []byte // every added value, ValLen bytes each, in Add order
+	n     int // entries added; the per-entry sequence number
 	built bool
+
+	// direct mode: every added value, ValLen bytes each, in Add order.
+	vals []byte
+
+	// interned mode: the distinct values, the id of each, and the id added at
+	// each sequence number. The sequence stays separate from the value id —
+	// conflating them would break last-wins, which resolves by insertion order.
+	tab   []byte
+	byVal map[string]uint32
+	ids   []uint32
 }
 
-// entry6 pairs a 128-bit address with the index of its value. The value index
-// doubles as insertion order, which is what lets the duplicate rule — last
-// added wins — survive sorting.
+// entry6 pairs a 128-bit address with its sequence number — insertion order,
+// which is what lets the duplicate rule (last added wins) survive sorting.
 type entry6 struct {
 	a  addr6
 	vi uint32
@@ -39,7 +48,11 @@ func NewBuilder(opt Options) *Builder {
 	if opt.ValLen <= 0 || opt.ValLen > maxValLen {
 		panic(fmt.Sprintf("ipmap: ValLen %d is not in 1..%d", opt.ValLen, maxValLen))
 	}
-	return &Builder{opt: opt}
+	b := &Builder{opt: opt}
+	if opt.Intern {
+		b.byVal = make(map[string]uint32)
+	}
+	return b
 }
 
 // Add records one address and its value. val must be exactly ValLen bytes; it
@@ -61,11 +74,10 @@ func (b *Builder) Add(addr netip.Addr, val []byte) error {
 	if len(val) != b.opt.ValLen {
 		return fmt.Errorf("ipmap: value is %d bytes, ValLen is %d", len(val), b.opt.ValLen)
 	}
-	n := len(b.vals) / b.opt.ValLen
-	if n > math.MaxUint32 {
+	if b.n > math.MaxUint32 {
 		return fmt.Errorf("ipmap: too many entries")
 	}
-	vi := uint32(n)
+	vi := uint32(b.n)
 	addr = addr.Unmap()
 	if addr.Is4() {
 		a4 := addr.As4()
@@ -74,7 +86,18 @@ func (b *Builder) Add(addr netip.Addr, val []byte) error {
 	} else {
 		b.v6 = append(b.v6, entry6{a: addr6Of(addr), vi: vi})
 	}
-	b.vals = append(b.vals, val...)
+	if b.opt.Intern {
+		id, ok := b.byVal[string(val)] // a hit does not allocate the string
+		if !ok {
+			id = uint32(len(b.byVal))
+			b.byVal[string(val)] = id
+			b.tab = append(b.tab, val...)
+		}
+		b.ids = append(b.ids, id)
+	} else {
+		b.vals = append(b.vals, val...)
+	}
+	b.n++
 	return nil
 }
 
@@ -85,17 +108,41 @@ func (b *Builder) Build() (*Map, error) {
 		panic("ipmap: Build called twice")
 	}
 	b.built = true
-	if b.opt.Intern {
-		return nil, fmt.Errorf("ipmap: interning is not implemented yet")
-	}
 
 	m := &Map{valLen: b.opt.ValLen}
+	if b.opt.Intern {
+		m.stats.Distinct = len(b.byVal)
+	}
 	b.build4(m)
 	b.build6(m)
 
 	// Release the builder's intermediates; the Map owns compact copies.
-	b.v4, b.v6, b.vals = nil, nil, nil
+	b.v4, b.v6, b.vals, b.byVal, b.ids = nil, nil, nil, nil, nil
 	return m, nil
+}
+
+// newValues prepares a store's value layout for n entries: direct when
+// interning is off, otherwise the shared table plus a packed-id array whose
+// width is derived from the distinct count — and asserted on every write.
+func (b *Builder) newValues(n int) values {
+	v := values{valLen: b.opt.ValLen}
+	if !b.opt.Intern {
+		v.direct = make([]byte, n*b.opt.ValLen)
+		return v
+	}
+	v.tab = b.tab
+	v.idW = idWidth(len(b.byVal))
+	v.ids = make([]byte, n*v.idW)
+	return v
+}
+
+// setVal writes the value for sequence number seq into slot at.
+func (b *Builder) setVal(v *values, at int, seq uint32) {
+	if b.opt.Intern {
+		v.putID(at, b.ids[seq])
+		return
+	}
+	copy(v.direct[at*b.opt.ValLen:], b.vals[int(seq)*b.opt.ValLen:int(seq+1)*b.opt.ValLen])
 }
 
 // build4 compiles the 32-bit store: a dense per-/24 index over suffix bytes.
@@ -122,10 +169,9 @@ func (b *Builder) build4(m *Map) {
 	}
 
 	s := &m.s4
-	s.valLen = b.opt.ValLen
 	s.idx = make([]uint32, 1<<24+1)
 	s.suffix = make([]uint8, len(kept))
-	s.val = make([]byte, len(kept)*b.opt.ValLen)
+	s.vals = b.newValues(len(kept))
 	for _, e := range kept {
 		s.idx[e>>40+1]++ // count entries per /24 (address's top 24 bits)
 	}
@@ -138,8 +184,7 @@ func (b *Builder) build4(m *Map) {
 		at := s.idx[g] + cursor[g]
 		cursor[g]++
 		s.suffix[at] = uint8(e >> 32)
-		vi := uint32(e)
-		copy(s.val[int(at)*b.opt.ValLen:], b.vals[int(vi)*b.opt.ValLen:int(vi+1)*b.opt.ValLen])
+		b.setVal(&s.vals, int(at), uint32(e))
 	}
 }
 
@@ -175,22 +220,26 @@ func (b *Builder) build6(m *Map) {
 	m.stats.Addrs6 = len(kept)
 
 	s := &m.s6
-	s.valLen = b.opt.ValLen
 	s.suffix = make([]uint64, len(kept))
-	s.val = make([]byte, len(kept)*b.opt.ValLen)
+	s.vals = b.newValues(len(kept))
 	for i, e := range kept {
 		if i == 0 || kept[i-1].a.hi != e.a.hi {
 			s.prefix = append(s.prefix, e.a.hi)
 			s.pidx = append(s.pidx, uint32(i))
 		}
 		s.suffix[i] = e.a.lo
-		copy(s.val[i*b.opt.ValLen:], b.vals[int(e.vi)*b.opt.ValLen:int(e.vi+1)*b.opt.ValLen])
+		b.setVal(&s.vals, i, e.vi)
 	}
 	s.pidx = append(s.pidx, uint32(len(kept)))
 }
 
-// sameVal reports whether two stored values are byte-equal.
+// sameVal reports whether the values added at two sequence numbers are equal.
+// Interned mode answers by id — equal bytes intern to one id, so identity is
+// equality — and direct mode compares the bytes.
 func (b *Builder) sameVal(vi, vj uint32) bool {
+	if b.opt.Intern {
+		return b.ids[vi] == b.ids[vj]
+	}
 	n := b.opt.ValLen
 	x := b.vals[int(vi)*n : int(vi+1)*n]
 	y := b.vals[int(vj)*n : int(vj+1)*n]
