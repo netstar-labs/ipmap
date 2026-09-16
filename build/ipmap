@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# build/ipmap — cross-compile the ipmap CLI (linux/amd64, version stamped) and
+# leave a self-contained package under build/install/.
+#
+#   build/ipmap [--cli]
+#
+# The build output is not tracked; only this script is.
+set -eu
+
+BINARY=ipmap
+CMD=./app/ipmap
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+
+OUT=build/install
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+rm -rf "$OUT"
+mkdir -p "$OUT"
+
+echo "building $BINARY $VERSION (linux/amd64)"
+GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+    -o "$OUT/$BINARY" "$CMD"
+
+printf '%s\n' "$VERSION" > "$OUT/$BINARY.version"
+tar -C "$OUT" -czf "$OUT/$BINARY.tgz" "$BINARY" "$BINARY.version"
+
+echo "wrote $OUT/$BINARY.tgz ($VERSION)"

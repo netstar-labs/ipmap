@@ -1,0 +1,25 @@
+name: no-large-blobs
+on: { pull_request: {}, push: { branches: [main] } }
+
+# This repo is developed against multi-gigabyte local corpora that must never
+# enter the history: .gitignore does not stop `git add -f`, and a public repo's
+# history is public too. Rejecting an oversized blob at PR time is far cheaper
+# than rewriting history after the fact.
+jobs:
+  no-large-blobs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: reject blobs over 5 MB
+        run: |
+          limit=$((5 * 1024 * 1024))
+          big=$(git rev-list --objects --all \
+                | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' \
+                | awk -v l="$limit" '$1=="blob" && $3>l {printf "  %s  %.1f MB\n", $4, $3/1048576}')
+          if [ -n "$big" ]; then
+            echo "Blobs over 5 MB are in the history:"
+            echo "$big"
+            echo "Corpora and generated artifacts stay local — see docs/roadmap.md, rule R4."
+            exit 1
+          fi

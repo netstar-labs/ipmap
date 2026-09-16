@@ -1,0 +1,10 @@
+# Review routing. Owners are teams, never individuals — a team survives someone
+# changing role. GitHub ignores an unknown owner WITHOUT ERROR, so after editing
+# confirm every team below resolves:
+#     gh api orgs/netstar-labs/teams --jq '.[].slug'
+
+*                       @netstar-labs/the-laboratory
+
+# Paths that always need a second look, whoever wrote the change.
+/.github/workflows/     @netstar-labs/the-laboratory
+/docs/roadmap.md        @netstar-labs/the-laboratory
