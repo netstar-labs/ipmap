@@ -24,6 +24,11 @@ type Stats struct {
 	Addrs6       int // distinct 128-bit addresses stored
 	Dups         int // entries dropped by the last-wins rule
 	DupConflicts int // ...of which carried a different value than the survivor
+	// Distinct is the interned value table's row count — every distinct value
+	// ever added, including values whose only entries were later superseded by
+	// the last-wins rule (they stay in the table; compaction would buy little
+	// on real feeds, where duplicates are rare). Zero when interning is off.
+	Distinct int
 }
 
 // Stats reports the build's counts.
@@ -69,8 +74,7 @@ func (m *Map) LookupInto(addr netip.Addr, dst []byte) bool {
 type store4 struct {
 	idx    []uint32 // 2^24+1 offsets; group g's entries are [idx[g], idx[g+1])
 	suffix []uint8  // low octet, ascending within a group
-	val    []byte   // valLen bytes per entry, parallel to suffix
-	valLen int
+	vals   values   // entry position -> value bytes, direct or interned
 }
 
 func (s *store4) lookup(ip uint32) ([]byte, bool) {
@@ -83,7 +87,7 @@ func (s *store4) lookup(ip uint32) ([]byte, bool) {
 	// linear scan with an early exit beats a binary search's branching here.
 	for j := lo; j < hi; j++ {
 		if s.suffix[j] == want {
-			return s.val[int(j)*s.valLen : int(j+1)*s.valLen : int(j+1)*s.valLen], true
+			return s.vals.get(int(j)), true
 		}
 		if s.suffix[j] > want {
 			break
@@ -100,8 +104,7 @@ type store6 struct {
 	prefix []uint64 // distinct high words, ascending
 	pidx   []uint32 // len(prefix)+1 offsets into suffix
 	suffix []uint64 // low words, ascending within a group
-	val    []byte
-	valLen int
+	vals   values
 }
 
 func (s *store6) lookup(a addr6) ([]byte, bool) {
@@ -115,6 +118,5 @@ func (s *store6) lookup(a addr6) ([]byte, bool) {
 	if j == len(seg) || seg[j] != a.lo {
 		return nil, false
 	}
-	at := int(lo) + j
-	return s.val[at*s.valLen : (at+1)*s.valLen : (at+1)*s.valLen], true
+	return s.vals.get(int(lo) + j), true
 }

@@ -103,13 +103,30 @@ recorded here. A random binary search over 859 MB is ~27 dependent cache misses.
 
 ## Interning
 
-Values repeat heavily in this shape of data — measured, 312 addresses per distinct value. With
-interning enabled the artifact stores an index and a value table rather than a value per address,
-which is where most of the size win lives. It stays domain-agnostic: it is deduplication of
-repeated byte strings, and the library never looks inside them.
+Values repeat heavily in this shape of data — measured, 312 addresses per distinct value on the
+feed that motivated the design. With interning enabled the store keeps a table of the distinct
+values and a fixed-width id per entry, which is where most of the size win lives. It stays
+domain-agnostic: it is deduplication of repeated byte strings, and the library never looks inside
+them. Both families share one table, because a value's identity has no family.
 
-The index width is derived from the distinct count and **asserted at build time**; overflowing
-it fails loudly rather than silently at query.
+The id width is the narrowest of 1, 2, 3 or 4 bytes that holds the distinct count, derived at
+build time and **asserted on every write** — an id that does not fit means the build's own
+bookkeeping is wrong, and it dies there rather than corrupting a neighbour and surfacing as a
+wrong answer at query time.
+
+Two properties worth knowing:
+
+- **The table keeps every distinct value ever added**, including values whose only entries were
+  later superseded by the last-wins duplicate rule. On real feeds duplicates are a handful in
+  10⁸, so compaction would buy almost nothing and is deliberately not done.
+- **Duplicate semantics are unchanged by interning.** Insertion order and value identity are
+  tracked separately — conflating them is the natural bug, and it breaks last-wins.
+
+Measured on the in-memory store, 10⁸-scale address corpora with values derived onto a 16-bit
+space (synthetic cardinality — the honest 312:1 figure above comes from the motivating feed, not
+from this test): 107.4M and 193.3M entries interned to 65,536 distinct values, exhaustively
+verified, with peak build memory *lower* than the direct layout (2.72 vs 2.83 GB at 107M) and the
+128-bit build 20% faster — two-byte ids move less memory than five-byte values.
 
 ## Behaviour under scale
 
