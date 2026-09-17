@@ -16,9 +16,12 @@ structures serve this well and there are good ones.
 
 **Observation data is not.** What a scan found, what a sensor saw, what a pipeline classified —
 attached to individual addresses, with neighbours that are unrelated or absent. Measured on a
-real feed of 10⁸ addresses, consecutive entries share a value about 1.2 times out of one, which
-is another way of saying they do not. Encoding that as prefixes produces **more entries than
-there are addresses**, and an index **37% larger** than simply storing every address.
+real feed of 10⁸ addresses, merging every run of consecutive addresses that share a value shrinks
+the set by only **1.00–1.20×** — another way of saying there are almost no runs to merge.
+Encoding that as prefixes barely reduces the entry count — 97.8 million prefixes for 107.4
+million addresses, because CIDR-aligning the few runs that exist splits them back up — while
+every entry grows by half. The result is an index **37% larger** than simply storing every
+address.
 
 There is no widely available structure for the second shape. `ipmap` is that structure.
 
@@ -29,8 +32,8 @@ position rather than stored per entry. An IPv4 address then costs one byte inste
 128-bit address costs eight instead of sixteen, with its prefix written once per group rather
 than once per address.
 
-Measured against the alternatives on 10⁸ real addresses, every candidate verified exhaustively
-against every key:
+Measured against the alternatives on 10⁸ real addresses at a 3-byte value width, every candidate
+verified exhaustively against every key:
 
 | Structure | Size | Lookup |
 |---|---|---|

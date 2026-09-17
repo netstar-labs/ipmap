@@ -267,6 +267,46 @@ func testDuplicateRule(t *testing.T, opt Options) {
 	}
 }
 
+// A zone identifies a link on one machine; the artifact stores hosts and has
+// nowhere to put one. Before this was refused, two interfaces' link-local
+// addresses silently became one entry (counted as a conflicting duplicate) and
+// an unzoned lookup answered with whichever was added last — found by the
+// release review, which is exactly the kind of quiet wrong answer this library
+// exists not to give.
+func TestZonedAddressesRefused(t *testing.T) {
+	b := NewBuilder(Options{ValLen: 1})
+	z0 := netip.MustParseAddr("fe80::1%eth0")
+	z1 := netip.MustParseAddr("fe80::1%eth1")
+	for _, z := range []netip.Addr{z0, z1} {
+		if err := b.Add(z, []byte{1}); err == nil {
+			t.Fatalf("Add(%v) accepted a zoned address", z)
+		}
+	}
+	if err := b.Add(netip.MustParseAddr("fe80::1"), []byte{7}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := m.Stats(); st.Addrs6 != 1 || st.Dups != 0 {
+		t.Fatalf("refused adds still reached the store: %+v", st)
+	}
+	// And the query side agrees: a zoned address is not a key, so it misses
+	// rather than answering from the unzoned address sharing its bits.
+	for _, z := range []netip.Addr{z0, z1} {
+		if _, ok := m.Lookup(z); ok {
+			t.Fatalf("Lookup(%v) answered from the unzoned address", z)
+		}
+		if m.LookupInto(z, make([]byte, 1)) {
+			t.Fatalf("LookupInto(%v) answered from the unzoned address", z)
+		}
+	}
+	if v, ok := m.Lookup(netip.MustParseAddr("fe80::1")); !ok || v[0] != 7 {
+		t.Fatalf("the unzoned address stopped answering: %x %v", v, ok)
+	}
+}
+
 // The entry cap is the count fitting uint32: the stores' offset arrays end
 // with a sentinel equal to the count, so the 2^32-th entry would wrap it to
 // zero — a silent universal miss in one family, a slice panic in the other.
@@ -328,7 +368,7 @@ func TestEmptyAndSingleFamilyMaps(t *testing.T) {
 		t.Fatal("a map with no 32-bit entries answered one")
 	}
 	if m6.s4.idx != nil {
-		t.Fatal("a map with no 32-bit entries still allocated the 64 MB index")
+		t.Fatal("a map with no 32-bit entries still allocated the 67 MB index")
 	}
 }
 

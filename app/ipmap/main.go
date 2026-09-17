@@ -4,6 +4,7 @@
 //	ipmap lookup -db <artifact> [-json] <addr> ...      query; stdin when no args
 //	ipmap verify -db <artifact>                         exit non-zero unless valid
 //	ipmap stats  -db <artifact> [-json]                 what the artifact holds
+//	ipmap version                                       what build this is
 //
 // The spec is one entry per line — an address and a hex value — with '#'
 // comments and blank lines ignored. The value width is taken from the first
@@ -26,6 +27,10 @@ import (
 	"github.com/netstar-labs/ipmap"
 )
 
+// version is stamped at link time by build/ipmap (-X main.version). It stays
+// "dev" for a plain `go build`, which is the honest answer for one.
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
@@ -47,6 +52,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		err = verify(args[1:], stdout)
 	case "stats":
 		err = stats(args[1:], stdout)
+	case "version", "-version", "--version":
+		fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
 		usage(stderr)
 		return 2
@@ -69,6 +76,7 @@ func usage(w io.Writer) {
   lookup -db <artifact> [-json] <addr> [...]    query; reads stdin when no args
   verify -db <artifact>                         exit non-zero unless valid
   stats  -db <artifact> [-json]                 what the artifact holds
+  version                                       what build this is
 
 The spec is one "<address> <value-hex>" entry per line; '#' comments and blank
 lines are ignored, both address families may share one file, and the value

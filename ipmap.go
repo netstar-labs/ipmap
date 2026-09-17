@@ -4,8 +4,9 @@
 //
 // It exists because host data does not fold into ranges. A dataset of individual
 // addresses — the kind a scanner, a sensor or a reputation feed produces — has
-// almost no run structure, so a prefix structure ends up storing more entries
-// than there are addresses. ipmap is the other half of that problem: where a
+// almost no run structure, so a prefix structure barely reduces the entry count
+// while making every entry larger, and ends up bigger than storing each address
+// flat. ipmap is the other half of that problem: where a
 // CIDR library answers "which prefix covers this address", ipmap answers "what
 // is stored against this exact address", over hundreds of millions of them.
 //
@@ -17,9 +18,10 @@
 // time and never interprets them, which is what lets one library serve callers
 // whose payloads have nothing in common.
 //
-// Status: under construction. The README's status note says what is built so
-// far and docs/roadmap.md holds the plan; the public API below is not yet
-// stable.
+// The artifact format is frozen at version 1: a reader refuses a version it
+// does not recognise rather than guessing at it. The Go API is v0.x — stable
+// in practice, not yet promised, because it has had no outside consumer to
+// prove it sufficient.
 package ipmap
 
 import "errors"

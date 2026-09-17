@@ -66,15 +66,28 @@ func NewBuilder(opt Options) *Builder {
 // counts both the duplicates and how many of them carried a different value,
 // because an input that disagrees with itself is worth knowing about.
 //
+// A zoned address (fe80::1%eth0) is refused: the artifact stores hosts, and a
+// zone identifies a link on one machine — see Map.Lookup, which will not
+// answer for one either.
+//
 // A Builder holds at most 2³²−1 entries — a single budget across both
 // families, because the artifact's offsets are 32-bit. Add reports an error at
 // the cap rather than wrapping.
+//
+// Add panics only on misuse of the Builder itself: calling it after Build.
 func (b *Builder) Add(addr netip.Addr, val []byte) error {
 	if b.built {
 		panic("ipmap: Add after Build")
 	}
 	if !addr.IsValid() {
 		return fmt.Errorf("ipmap: invalid address")
+	}
+	// A zone names a link on one machine, not a host, and the artifact has
+	// nowhere to put it: storing fe80::1%eth0 would store it as fe80::1, so
+	// two interfaces' addresses would silently become one entry and a lookup
+	// of either would answer with whichever was added last. Refuse instead.
+	if addr.Zone() != "" {
+		return fmt.Errorf("ipmap: address carries a zone (%q): a zone identifies a link, not a host", addr.Zone())
 	}
 	if len(val) != b.opt.ValLen {
 		return fmt.Errorf("ipmap: value is %d bytes, ValLen is %d", len(val), b.opt.ValLen)
@@ -181,7 +194,7 @@ func (b *Builder) build4(m *Map) {
 	}
 	m.stats.Addrs4 = len(kept)
 	if len(kept) == 0 {
-		return // a map with no 32-bit entries does not pay 64 MB for their index
+		return // a map with no 32-bit entries does not pay 67 MB for their index
 	}
 
 	s := &m.s4

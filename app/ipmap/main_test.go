@@ -265,6 +265,23 @@ func FuzzSpecParse(f *testing.F) {
 	})
 }
 
+// The build script stamps -X main.version, and Go's linker discards an -X for
+// a symbol that does not exist *silently* — which is how every build before
+// this test went out unversioned. The variable must therefore exist and be
+// reachable from the command line; the release audit found the gap, this keeps
+// it closed.
+func TestVersionCommand(t *testing.T) {
+	for _, arg := range []string{"version", "-version", "--version"} {
+		code, out, errs := exec(t, "", arg)
+		if code != 0 || strings.TrimSpace(out) != version {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q; want exit 0 and %q", arg, code, out, errs, version)
+		}
+	}
+	if version == "" {
+		t.Fatal("version is empty: an unstamped build must still say something")
+	}
+}
+
 func TestUsageAndUnknown(t *testing.T) {
 	if code, _, errs := exec(t, ""); code != 2 || !strings.Contains(errs, "usage:") {
 		t.Fatalf("no-args: exit %d, %q", code, errs)

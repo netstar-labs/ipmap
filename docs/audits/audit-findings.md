@@ -26,7 +26,7 @@ doc-drift claims and were consolidated there (C4→D3, C6→D4).
 
 | # | Claim | Verdict | Disposition |
 |---|---|---|---|
-| A1 | build4's 64 MB cursor array is removable: the placement index equals the loop index for sorted input | CONFIRMED | removed |
+| A1 | build4's 67 MB cursor array is removable: the placement index equals the loop index for sorted input | CONFIRMED | removed |
 | A2 | trailingQuad duplicates parseAddr4 at its only call site | CONFIRMED | deleted; parseAddr4's reject path no longer leaks a partial value |
 | B1 | header field offsets should be named constants to prevent silent drift | REFUTED | drift cannot be silent: round-trip and validation tests reject one-sided edits loudly |
 | B2 | the packed-id decode exists twice — lookup path and validator — and could drift | CONFIRMED | single decoder `values.id`, inlined at every call site |

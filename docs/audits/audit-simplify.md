@@ -5,7 +5,7 @@ running differential experiments against scratch copies.
 
 ## A1 — build4's cursor array — CONFIRMED, removed
 
-**Claim.** The 64 MB `cursor := make([]uint32, 1<<24)` scatter array in build4
+**Claim.** The 67 MB `cursor := make([]uint32, 1<<24)` scatter array in build4
 is dead weight: after the sort, entry `i`'s placement slot `idx[g] + cursor[g]`
 always equals `i` itself.
 
