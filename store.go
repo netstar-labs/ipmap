@@ -47,9 +47,13 @@ func (m *Map) ValLen() int { return m.valLen }
 // Lookup returns the value stored against addr. The returned slice aliases the
 // Map's storage: it is valid for the Map's lifetime and must not be modified —
 // use LookupInto for an owned copy. A 4-in-6 mapped address is unmapped first,
-// matching Add, so both spellings of a host answer identically.
+// matching Add, so both spellings of a host answer identically. An invalid or
+// zoned address misses, matching Add's refusal to store one.
 func (m *Map) Lookup(addr netip.Addr) ([]byte, bool) {
-	if !addr.IsValid() {
+	// A zoned address is not a key any artifact holds — Add refuses to store
+	// one — so it misses rather than answering from the unzoned address that
+	// happens to share its bits.
+	if !addr.IsValid() || addr.Zone() != "" {
 		return nil, false
 	}
 	addr = addr.Unmap()

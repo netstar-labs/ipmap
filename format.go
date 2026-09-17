@@ -167,6 +167,10 @@ func (m *Map) tabBytes() []byte {
 // returning. The cost is one sequential pass over the file, paid once at open
 // rather than as wrong answers later. The returned Map's values alias the
 // mapping and are valid until Close.
+//
+// The mapping is a real mmap on unix, where an artifact may exceed RAM and is
+// paged in on demand; on other platforms the file is read into memory instead,
+// so it must fit. Nothing else differs.
 func Open(path string) (*Map, error) {
 	data, closer, err := mapFile(path)
 	if err != nil {

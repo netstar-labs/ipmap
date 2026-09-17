@@ -4,8 +4,9 @@
 real ~10⁸-address dataset unless marked otherwise; each candidate was verified exhaustively —
 every key looked up and checked — rather than sampled.*
 
-> **Under construction.** This describes the design the implementation is being built to. Where
-> a number came from a prototype rather than this code, it says so.
+> **This describes the shipped implementation.** Where a number came from the prototype that
+> preceded it — the candidate bake-off in *What was measured against what* — it says so; the
+> scale figures under *Behaviour under scale* were measured on this code.
 
 ## The premise
 
@@ -17,9 +18,11 @@ an identical value, measured over two real feeds:
 | 32-bit | 107,371,346 | 72.6% | **1.196×** |
 | 128-bit | 193,274,998 | **99.8%** | **1.001×** |
 
-A prefix encoding of the first needs 97.8 million prefixes for 107.4 million addresses — more
-entries than addresses — and measures **1,174 MB against 859 MB flat**. Folding costs 37% more
-than not folding. The limit is the address distribution, not the value encoding: discarding every
+A prefix encoding of the first needs 97.8 million prefixes for 107.4 million addresses. The
+1.196× fold leaves about 89.8 million same-value runs, and CIDR-aligning those runs splits them
+back up into **more prefixes than there were runs** — so the entry count falls by 9%, while every
+entry grows from 8 bytes to 12. It measures **1,174 MB against 859 MB flat**: folding costs 37%
+more than not folding. The limit is the address distribution, not the value encoding: discarding every
 field and keeping only membership still folds just 1.70×.
 
 **So the design problem is not "how do we compress ranges" but "how do we store a scatter".**
@@ -54,8 +57,8 @@ was written twice by accident.
 | | 32-bit | 128-bit |
 |---|---|---|
 | Group key | first 24 bits | first 64 bits |
-| Group lookup | **dense index**, 2²⁴ entries | **sorted prefix table**, binary-searched |
-| Why | 2²⁴ × 4 B = 67 MB, affordable | 2⁶⁴ cannot be indexed at any density |
+| Group lookup | **dense index**, 2²⁴+1 offsets | **sorted prefix table**, binary-searched |
+| Why | (2²⁴+1) × 4 B = 67 MB, affordable | 2⁶⁴ cannot be indexed at any density |
 | Suffix | 1 byte | 8 bytes |
 | Byte order on disk | little-endian | little-endian, the same — keys load and compare as native `uint64` words |
 
@@ -72,13 +75,15 @@ Measured for the 128-bit family, 193 million addresses across 4,414,877 distinct
 | Prefix encoding | 4,055 MB |
 | **Prefix-split** | **2,179 MB** |
 
-Writing the 64-bit prefix once per group instead of once per address saves 1.55 GB — a 44%
+Writing the 64-bit prefix once per group instead of once per address saves 1.69 GB — a 44%
 reduction. **The low 64 bits cannot be compressed further**: only 1.9% of them fit in 32 bits and
 5.2% in 48, because interface identifiers are effectively random.
 
 ## What was measured against what
 
-Every candidate built from the same 107,371,346 addresses, verified exhaustively:
+Every candidate built from the same 107,371,346 addresses at a 3-byte value width, verified
+exhaustively. These are **prototype** measurements — the bake-off that chose the structure — so
+they carry the prototype's value width rather than the 4-byte one used in the scale sweep below:
 
 | Layout | Size | Hit | Miss |
 |---|---|---|---|
@@ -186,18 +191,19 @@ no longer had in space. So the sizing rule, stated rather than discovered: **kee
 128-bit entries built bare; the sweep's 100 M point, held alongside its own 1.6 GB of input,
 had already crossed the line. 32-bit builds are ~2.5× cheaper per entry.
 
-Two boundaries this is not: **the query side has none** — an opened artifact is served from the
-mapping and may exceed RAM, with cold probes costing a page fault; and the entry cap (2³²−1 per
-build, both families combined) sits near 260 GB of build memory, the same decade as the sort
-boundary. When the sort boundary is actually reached, the lever is a **partitioned external merge
+Two boundaries this is not: **the query side has none on unix** — an opened artifact is served
+from the mapping and may exceed RAM, with cold probes costing a page fault (off unix there is no
+mmap: `Open` reads the file into memory, so there the artifact must fit); and the entry cap
+(2³²−1 per build, both families combined) sits near 260 GB of build memory, the same decade as
+the sort boundary. When the sort boundary is actually reached, the lever is a **partitioned external merge
 sort** — see *Headroom, deliberately untaken* in [the roadmap](roadmap.md), which records every
 lever this measurement session weighed and left on the table, with its trigger. Past the line the build slows first and fails loudly (OOM) second; it does
 not produce a wrong artifact — everything written is checksummed and canonical regardless.
 
 **Where it stops working, and how it fails** (the phase's adversarial question):
 
-- The builder refuses its 2³²−1-th entry with an error — the count must fit the artifact's
-  32-bit offsets; test-pinned at the boundary.
+- The builder holds at most 2³²−1 entries and errors on the one after — the count must fit the
+  artifact's 32-bit offsets; test-pinned at both sides of the boundary.
 - An oversized build degrades visibly (time) and then loudly (OOM). No path degrades silently:
   the lookup curves above are the structure's predicted shapes, and an artifact that builds is
   byte-canonical and CRC-verified whatever the memory weather was.
