@@ -336,9 +336,14 @@ func TestCorruptionCorpus(t *testing.T) {
 		return b
 	}}
 
+	// One scratch buffer for every case: a fresh 67 MB copy per case is ~9 GB
+	// of allocation churn, which under the race detector's slower GC runs the
+	// 8 GB CI machine out of memory. Nothing retains the bytes past its case —
+	// openTemp writes them to a file and opens that.
+	scratch := make([]byte, 0, max(len(direct), len(interned))+16)
 	run := func(t *testing.T, base []byte, c corrupt) {
 		t.Helper()
-		mutated := c.mut(t, append([]byte(nil), base...))
+		mutated := c.mut(t, append(scratch[:0], base...))
 		m, err := openTemp(t, mutated)
 		if err == nil {
 			m.Close()
@@ -479,9 +484,13 @@ func TestOpenMutational(t *testing.T) {
 	if raceEnabled {
 		rounds = 200
 	}
+	// One scratch buffer across all rounds, for the same reason as the
+	// corruption corpus: hundreds of fresh 67 MB copies are what pushes the
+	// race pass past the CI machine's memory, and no round retains its bytes.
+	scratch := make([]byte, 0, max(len(direct), len(interned)))
 	for _, base := range [][]byte{direct, interned} {
 		for i := 0; i < rounds; i++ {
-			data := append([]byte(nil), base...)
+			data := append(scratch[:0], base...)
 			switch r.IntN(4) {
 			case 0: // flip a byte anywhere
 				data[r.IntN(len(data))] ^= byte(1 + r.IntN(255))
