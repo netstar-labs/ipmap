@@ -272,6 +272,19 @@ published.*
 
 ---
 
+## Headroom, deliberately untaken
+
+Levers weighed during P7–P8 and left on the table, each with the trigger that would change the
+answer. Recorded so the next developer inherits the analysis, not just the absence.
+
+| Lever | Buys | Take it when |
+|---|---|---|
+| **Partitioned external merge sort** in Build | builds past the in-memory boundary — sequential merge runs, *not* mmap'd scratch, which thrashes under random-access sorting | input approaches ~11M 128-bit entries per GB of build-host RAM at ValLen 4 (the measured model: peak ≈ 1.4·(35+2V)·n); today's largest feed is ~5× under it on a 32 GB host |
+| **Parallel sort** in Build | ~4–5× off the sort half (26.7 s at 100M 128-bit entries, single-threaded today) | build latency matters operationally — it is once-per-artifact now |
+| **Per-/24 occupancy bitmap** (popcount instead of scan) | the 32-bit populated-group miss | that path degrades meaningfully — measured 151→177 ns across a 10× sweep, so not yet |
+| **Huge pages / TLB relief** for multi-GB maps | the hit path's cache drift (140→207 ns over 10×) | a consumer runs latency-sensitive at ≥10⁸ entries; platform-specific |
+| **128-bit prefix search layout** (Eytzinger or top-bit radix) | the log-depth hit (776 ns at 28.6M prefixes ≈ 25 dependent misses) | 128-bit hit latency at that scale is on a serving path |
+
 ## Out of scope, permanently
 
 - **Prefix / longest-match lookup.** That is a different structure for different data; use a CIDR

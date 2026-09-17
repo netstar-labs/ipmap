@@ -241,6 +241,30 @@ func TestStatsGolden(t *testing.T) {
 	}
 }
 
+// The spec reader is a text parser fed by operators — the roadmap's rule (R5)
+// is that every parser gets fuzzed. The promise here is modest and absolute:
+// parseSpec never panics, and when it reports success it hands back a builder
+// with at least one entry in it.
+func FuzzSpecParse(f *testing.F) {
+	f.Add([]byte(spec))
+	f.Add([]byte("1.2.3.4 aa\n"))
+	f.Add([]byte("# only a comment\n\n"))
+	f.Add([]byte("::1 ffff\n1.2.3.4 ffff\n"))
+	f.Add([]byte("1.2.3.4 aa bb\n"))
+	f.Add([]byte("not-an-address zz\n"))
+	f.Add([]byte("1.2.3.4 \n"))
+	f.Add([]byte("1.2.3.4\x00aa\n\xff\xfe"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 1<<16 {
+			return
+		}
+		b, err := parseSpec(bytes.NewReader(data), "fuzz", false)
+		if (err == nil) != (b != nil) {
+			t.Fatalf("success and builder disagree: err=%v b=%v", err, b != nil)
+		}
+	})
+}
+
 func TestUsageAndUnknown(t *testing.T) {
 	if code, _, errs := exec(t, ""); code != 2 || !strings.Contains(errs, "usage:") {
 		t.Fatalf("no-args: exit %d, %q", code, errs)

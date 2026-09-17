@@ -127,9 +127,16 @@ plus the fixed index — measured, with the fit rule, in
 [architecture](architecture.md#behaviour-under-scale). Keep a build under about two-thirds of
 RAM: past that it slows first and OOMs second, and never writes a wrong artifact.
 
-**Reloading.** Build to a temporary path, verify, rename, then open the new file and drop the old
-mapping once in-flight readers have finished. Never write in place: a reader holding a mapping of
-a file being rewritten underneath it has no way to detect the change.
+**Reloading is zero-downtime.** Build to a temporary path, verify, rename over the old name
+(atomic on one filesystem), `Open` the new file, and swap an `atomic.Pointer[ipmap.Map]` — the
+whole cutover is one atomic store, and no reader ever locks or blocks. Readers mid-lookup keep
+answering from the old mapping: an mmap holds the file's content, not its name, so the rename
+disturbs nobody. The one decision left to you is when to `Close` the old map — Close unmaps, and
+values it returned die with it — so close only after its readers are provably done: a grace
+period, a refcount, or simply keeping old mappings until exit. Runnable:
+[example/lookup](../example/lookup/main.go). Never write an artifact in place: a reader mapped
+over a file being rewritten cannot detect the change, and on most platforms a truncation under a
+live mapping is a `SIGBUS` crash, not an error.
 
 **Monitoring.** `stats` reports entry counts, distinct values and the build epoch. An artifact
 whose epoch stops advancing is the failure most worth alerting on, because nothing else about it

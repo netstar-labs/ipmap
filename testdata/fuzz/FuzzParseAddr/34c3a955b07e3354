@@ -1,0 +1,2 @@
+go test fuzz v1
+string("O>\xff1G\xd0b")

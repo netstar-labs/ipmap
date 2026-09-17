@@ -1,0 +1,2 @@
+go test fuzz v1
+string("64:ff9b::192.0.2.33\a\xee\x18")

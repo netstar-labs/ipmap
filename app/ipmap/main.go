@@ -99,43 +99,9 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 		src, name = f, *in
 	}
 
-	var b *ipmap.Builder
-	lineNo := 0
-	sc := bufio.NewScanner(src)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		lineNo++
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || line[0] == '#' {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			return fmt.Errorf("%s:%d: want \"<address> <value-hex>\", got %d fields", name, lineNo, len(fields))
-		}
-		addr, err := netip.ParseAddr(fields[0])
-		if err != nil {
-			return fmt.Errorf("%s:%d: %v", name, lineNo, err)
-		}
-		val, err := hex.DecodeString(fields[1])
-		if err != nil {
-			return fmt.Errorf("%s:%d: value: %v", name, lineNo, err)
-		}
-		if b == nil { // the first entry sets the value width for the artifact
-			if len(val) == 0 {
-				return fmt.Errorf("%s:%d: empty value", name, lineNo)
-			}
-			b = ipmap.NewBuilder(ipmap.Options{ValLen: len(val), Intern: *intern})
-		}
-		if err := b.Add(addr, val); err != nil {
-			return fmt.Errorf("%s:%d: %v", name, lineNo, err)
-		}
-	}
-	if err := sc.Err(); err != nil {
+	b, err := parseSpec(src, name, *intern)
+	if err != nil {
 		return err
-	}
-	if b == nil {
-		return fmt.Errorf("%s: no entries", name)
 	}
 	m, err := b.Build()
 	if err != nil {
@@ -173,6 +139,53 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stderr)
 	return nil
+}
+
+// parseSpec reads the text spec from r into a Builder: one "<address>
+// <value-hex>" entry per line, '#' comments and blank lines ignored, the value
+// width fixed by the first entry. name is what errors cite ("stdin" or the
+// path). Split out of build so the reader can be fuzzed on its own — a text
+// parser fed by operators is exactly where a panic would otherwise hide.
+func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
+	var b *ipmap.Builder
+	lineNo := 0
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		lineNo++
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("%s:%d: want \"<address> <value-hex>\", got %d fields", name, lineNo, len(fields))
+		}
+		addr, err := netip.ParseAddr(fields[0])
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: %v", name, lineNo, err)
+		}
+		val, err := hex.DecodeString(fields[1])
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: value: %v", name, lineNo, err)
+		}
+		if b == nil { // the first entry sets the value width for the artifact
+			if len(val) == 0 {
+				return nil, fmt.Errorf("%s:%d: empty value", name, lineNo)
+			}
+			b = ipmap.NewBuilder(ipmap.Options{ValLen: len(val), Intern: intern})
+		}
+		if err := b.Add(addr, val); err != nil {
+			return nil, fmt.Errorf("%s:%d: %v", name, lineNo, err)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return nil, fmt.Errorf("%s: no entries", name)
+	}
+	return b, nil
 }
 
 func lookup(args []string, stdin io.Reader, stdout io.Writer) error {

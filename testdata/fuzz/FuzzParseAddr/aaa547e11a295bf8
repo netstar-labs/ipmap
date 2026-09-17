@@ -1,0 +1,2 @@
+go test fuzz v1
+string("::0\xa5\x86\xf4\xf5\xfe\xa5d%)")

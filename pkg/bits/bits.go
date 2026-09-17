@@ -21,6 +21,13 @@
 // Fields are allocated from bit 0 upward. A declaration that cannot fit —
 // a zero width, or a total past 64 bits — panics at declaration time, which
 // for a package-level layout means at init, loudly, in every test run.
+//
+// Why it ships with ipmap: the store holds opaque fixed-width values and never
+// interprets them, so packing structure into those bytes is the caller's job —
+// and this package is that job done once, correctly. example/build packs a
+// multi-field value this way. ipmap's own artifact format does not use it: the
+// format's offsets are frozen wire layout, spelled out longhand in format.go
+// where the file format is documented.
 package bits
 
 import "fmt"

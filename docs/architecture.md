@@ -184,7 +184,14 @@ what was observed instead is MaxRSS plateauing at 4.2 GB while the build went su
 no longer had in space. So the sizing rule, stated rather than discovered: **keep
 1.4·(35+2V)·n plus your input under about two-thirds of RAM** — on 16 GB that is roughly 175 M
 128-bit entries built bare; the sweep's 100 M point, held alongside its own 1.6 GB of input,
-had already crossed the line. 32-bit builds are ~2.5× cheaper per entry. Past the line the build slows first and fails loudly (OOM) second; it does
+had already crossed the line. 32-bit builds are ~2.5× cheaper per entry.
+
+Two boundaries this is not: **the query side has none** — an opened artifact is served from the
+mapping and may exceed RAM, with cold probes costing a page fault; and the entry cap (2³²−1 per
+build, both families combined) sits near 260 GB of build memory, the same decade as the sort
+boundary. When the sort boundary is actually reached, the lever is a **partitioned external merge
+sort** — see *Headroom, deliberately untaken* in [the roadmap](roadmap.md), which records every
+lever this measurement session weighed and left on the table, with its trigger. Past the line the build slows first and fails loudly (OOM) second; it does
 not produce a wrong artifact — everything written is checksummed and canonical regardless.
 
 **Where it stops working, and how it fails** (the phase's adversarial question):
