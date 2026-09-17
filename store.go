@@ -12,7 +12,9 @@ type Map struct {
 	s4     store4
 	s6     store6
 	valLen int
+	epoch  int64 // unix seconds; set by Build, carried by the artifact
 	stats  Stats
+	close  func() error // releases the mapping; nil for a built Map
 }
 
 // Stats describes what a build produced. Duplicates are reported rather than

@@ -11,11 +11,13 @@ const testValLen = 5 // deliberately odd: a power of two hides stride bugs
 
 // val derives a value from an address, so any test can know the right answer
 // for any address without carrying a table around.
-func val(a netip.Addr, salt byte) []byte {
+func val(a netip.Addr, salt byte) []byte { return valN(a, salt, testValLen) }
+
+func valN(a netip.Addr, salt byte, n int) []byte {
 	b := a.As16()
-	out := make([]byte, testValLen)
+	out := make([]byte, n)
 	for i, c := range b {
-		out[i%testValLen] ^= c + byte(i) + salt
+		out[i%n] ^= c + byte(i) + salt
 	}
 	out[0] |= 1 // never all-zero, so a zeroed buffer cannot pass as a hit
 	return out
@@ -68,11 +70,11 @@ func buildRandomOpt(t testing.TB, seed uint64, n int, opt Options, spy ...func(n
 			base := r.Uint32() &^ 0xff
 			for k, kn := 0, 1+r.IntN(40); k < kn; k++ {
 				a := v4addr(base | uint32(r.IntN(256)))
-				add(a, val(a, 0))
+				add(a, valN(a, 0, opt.ValLen))
 			}
 		} else {
 			a := v4addr(r.Uint32())
-			add(a, val(a, 0))
+			add(a, valN(a, 0, opt.ValLen))
 		}
 	}
 	// 128-bit: several suffixes under shared high words plus lone addresses.
@@ -80,7 +82,7 @@ func buildRandomOpt(t testing.TB, seed uint64, n int, opt Options, spy ...func(n
 		hi := r.Uint64()
 		for k, kn := 0, 1+r.IntN(6); k < kn; k++ {
 			a := addr6{hi: hi, lo: r.Uint64()}.addr()
-			add(a, val(a, 0))
+			add(a, valN(a, 0, opt.ValLen))
 		}
 	}
 	// Duplicates: re-add a sample with the same value, and a sample with a
@@ -92,7 +94,7 @@ func buildRandomOpt(t testing.TB, seed uint64, n int, opt Options, spy ...func(n
 	}
 	for i := 0; i < len(order)/10; i++ {
 		k := order[r.IntN(len(order))]
-		add(k, val(k, 7)) // a conflicting value; last-wins makes it the answer
+		add(k, valN(k, 7, opt.ValLen)) // a conflicting value; last-wins makes it the answer
 	}
 
 	m, err := b.Build()
@@ -128,7 +130,11 @@ func TestLookupExhaustive(t *testing.T) {
 func TestLookupMisses(t *testing.T) {
 	m, o := buildRandom(t, 2, 2000)
 	r := rand.New(rand.NewPCG(9, 9))
-	for i := 0; i < 200000; i++ {
+	probes := 200000
+	if raceEnabled {
+		probes = 40000
+	}
+	for i := 0; i < probes; i++ {
 		var a netip.Addr
 		if i%2 == 0 {
 			a = v4addr(r.Uint32())
