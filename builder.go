@@ -65,6 +65,10 @@ func NewBuilder(opt Options) *Builder {
 // Adding the same address twice is legal: the entry added last wins, and Build
 // counts both the duplicates and how many of them carried a different value,
 // because an input that disagrees with itself is worth knowing about.
+//
+// A Builder holds at most 2³²−1 entries — a single budget across both
+// families, because the artifact's offsets are 32-bit. Add reports an error at
+// the cap rather than wrapping.
 func (b *Builder) Add(addr netip.Addr, val []byte) error {
 	if b.built {
 		panic("ipmap: Add after Build")

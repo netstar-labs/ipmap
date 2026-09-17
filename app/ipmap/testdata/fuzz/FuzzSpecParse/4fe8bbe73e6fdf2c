@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("չВʴմչ\u05cfִʒʴչВʴչйм. 0")

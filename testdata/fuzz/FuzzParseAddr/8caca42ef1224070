@@ -1,0 +1,2 @@
+go test fuzz v1
+string("64:ff9\xeeUf9\xee\xf0.07b:\x7f192.\xf4\xf4\xf4\xf433")

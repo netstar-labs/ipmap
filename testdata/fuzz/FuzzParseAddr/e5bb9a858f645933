@@ -1,0 +1,2 @@
+go test fuzz v1
+string("0::0:d%7\x16X\x16\x16\x16Z\x167z")

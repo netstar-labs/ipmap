@@ -14,7 +14,6 @@ _bin/
 _dev/
 sandbox/
 install/
-testdata/
 
 # working plans stay local; the rest of docs/ is committed
 docs/plan/

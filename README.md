@@ -57,7 +57,8 @@ in common.
 - [docs/roadmap.md](docs/roadmap.md) — phases, exit criteria, the test and benchmark inventory
 
 **Examples**
-- [example/README.md](example/README.md) — runnable demonstrations, starting with embedding the library
+- [example/README.md](example/README.md) — four runnable demonstrations: embedding, building with
+  packed values, the zero-downtime reload, interning
 
 ## Layout
 

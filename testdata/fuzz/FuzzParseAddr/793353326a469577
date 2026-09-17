@@ -1,0 +1,2 @@
+go test fuzz v1
+string("64:ff9b::\xe5\xea\xe5\xe5192.0.2.33")
