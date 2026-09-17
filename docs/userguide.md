@@ -85,6 +85,16 @@ whenever many addresses share a value — a set of 10⁸ addresses drawn from 10
 then pays for each value once rather than 10⁸ times. It changes nothing a caller observes: the
 same bytes come back either way.
 
+`Epoch` sets the build time stamped into the artifact; the zero value means *now*, which is what
+an ordinary build wants. **Set it when the build must be reproducible.** An artifact is otherwise
+identified by its bytes but cannot be regenerated from its inputs — two builds seconds apart
+differ in that field alone, which defeats content-addressing a build and defeats diffing a
+rebuild against a reference. A caller that needs either passes the date its inputs belong to:
+
+```go
+b := ipmap.NewBuilder(ipmap.Options{ValLen: 4, Epoch: generationDate})
+```
+
 `Add` reports an error — **check it** — when the value is not exactly `ValLen` bytes, when the
 address is invalid or carries a zone, or when the builder reaches its cap of 2³²−1 entries (one
 budget across both families; the artifact's offsets are 32-bit). A **zoned** address such as

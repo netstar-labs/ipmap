@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -663,5 +664,64 @@ func BenchmarkOpen(b *testing.B) {
 			b.Fatal(err)
 		}
 		h.Close()
+	}
+}
+
+// An artifact is identified by its bytes, and Open accepts nothing it cannot
+// fully account for — but before Options.Epoch existed, those bytes could not
+// be reproduced from their inputs, because Build stamped the wall clock. Two
+// builds seconds apart differed in that field alone, which defeats
+// content-addressing a build and diffing a rebuild against a reference.
+//
+// Found downstream by a consumer whose determinism test passed locally (both
+// builds inside one second) and failed in CI (they straddled one).
+func TestBuildWithFixedEpochIsReproducible(t *testing.T) {
+	at := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	build := func() []byte {
+		b := NewBuilder(Options{ValLen: 3, Intern: true, Epoch: at})
+		for i := 0; i < 500; i++ {
+			a := v4addr(uint32(i) * 7919)
+			if err := b.Add(a, valN(a, 0, 3)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		a6 := netip.MustParseAddr("2001:db8::1")
+		if err := b.Add(a6, valN(a6, 0, 3)); err != nil {
+			t.Fatal(err)
+		}
+		m, err := b.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Epoch() != at.Unix() {
+			t.Fatalf("Epoch = %d, want %d", m.Epoch(), at.Unix())
+		}
+		var buf bytes.Buffer
+		if _, err := m.WriteTo(&buf); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	first := build()
+	time.Sleep(1100 * time.Millisecond) // straddle a second boundary deliberately
+	if second := build(); !bytes.Equal(first, second) {
+		t.Fatal("two builds of identical input with a fixed epoch produced different bytes")
+	}
+}
+
+// The default still stamps the clock, so an ordinary build is unaffected.
+func TestZeroEpochStampsNow(t *testing.T) {
+	before := time.Now().Unix()
+	b := NewBuilder(Options{ValLen: 2})
+	a := netip.MustParseAddr("1.2.3.4")
+	if err := b.Add(a, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Epoch(); got < before || got > time.Now().Unix() {
+		t.Fatalf("Epoch = %d, want a stamp between %d and now", got, before)
 	}
 }
