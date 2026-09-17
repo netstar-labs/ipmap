@@ -440,20 +440,39 @@ func benchStore(b *testing.B) (*Map, []netip.Addr, []netip.Addr) {
 	return m, hits, misses
 }
 
+// The hit and miss benchmarks report per family (the inventory's rule): the
+// families are different structures, and the sum of a dense-index probe and a
+// double binary search is a number describing neither.
+func splitFamilies(addrs []netip.Addr) (v4, v6 []netip.Addr) {
+	for _, a := range addrs {
+		if a.Is4() {
+			v4 = append(v4, a)
+		} else {
+			v6 = append(v6, a)
+		}
+	}
+	return v4, v6
+}
+
+func benchLookup(m *Map, probes []netip.Addr) func(*testing.B) {
+	return func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
+			m.Lookup(probes[i%len(probes)])
+		}
+	}
+}
+
 func BenchmarkLookupHit(b *testing.B) {
 	m, hits, _ := benchStore(b)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; b.Loop(); i++ {
-		m.Lookup(hits[i%len(hits)])
-	}
+	h4, h6 := splitFamilies(hits)
+	b.Run("v4", benchLookup(m, h4))
+	b.Run("v6", benchLookup(m, h6))
 }
 
 func BenchmarkLookupMiss(b *testing.B) {
 	m, _, misses := benchStore(b)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; b.Loop(); i++ {
-		m.Lookup(misses[i%len(misses)])
-	}
+	m4, m6 := splitFamilies(misses)
+	b.Run("v4", benchLookup(m, m4))
+	b.Run("v6", benchLookup(m, m6))
 }

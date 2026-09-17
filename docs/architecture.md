@@ -130,34 +130,73 @@ verified, with peak build memory *lower* than the direct layout (2.72 vs 2.83 GB
 
 ## Behaviour under scale
 
-Measured at 1×, 4× and 10× on synthesised data:
+The shipped library, swept at 1×, 4× and 10× of a 10M-entries-per-family base (the machinery is
+`scale_test.go`, opt-in via `IPMAP_SCALE`). **Caveats first, because the numbers mean nothing
+without them**: one machine — Apple M2 Pro, 16 GB, go1.27.0 darwin/arm64; clustered synthetic
+input, not uniform — runs of 1–40 suffixes per shared /24 and 1–6 per shared /64, the shape of
+scanner and sensor feeds; 4-byte direct (uninterned) values; builds timed once per point,
+lookups via `go test -bench`. Misses are reported **twice**, because they are two code paths: a
+probe into a group that holds nothing (the index answers, nothing is scanned) and a probe into a
+populated group (scanned or binary-searched, then absent). Only the second can degrade with
+density, so averaging them would hide the curve this sweep exists to draw.
+
+**Lookups** (ns/op; every path 0 B/op, 0 allocs/op — R7 asserted at every point):
 
 | | 1× | 4× | 10× |
 |---|---|---|---|
-| Split-24 size | 0.50 GB | 1.79 GB | 4.36 GB |
-| Split-24 hit | 166 ns | 136 ns | **161 ns** |
-| Split-24 miss | 101 ns | 188 ns | 249 ns |
-| Bitmap+rank size | 0.89 GB | 1.86 GB | **3.79 GB** |
-| Bitmap+rank hit | 51 ns | 61 ns | **211 ns** |
+| 32-bit entries stored | 9.51 M | 38.0 M | 95.1 M |
+| hit | 140 | 190 | 207 |
+| miss, populated group | 151 | 159 | 177 |
+| miss, empty group | **23** | **23** | **23** |
+| 128-bit entries stored (prefixes) | 10 M (2.86 M) | 40 M (11.4 M) | 100 M (28.6 M) |
+| hit | 304 | 378 | 776 |
+| miss, populated group | 237 | 351 | 448 |
+| miss, empty group | 165 | 265 | 350 |
 
-Four things follow:
+- **The 32-bit family has no search depth to grow.** The hit and populated-miss drift
+  (140→207 ns) is cache and TLB reach over a structure growing 0.1→0.5 GB, not algorithm; the
+  empty-group miss — one index probe, no scan — is flat at 23 ns and scale-invariant.
+- **The 128-bit family follows its binary search.** Each 4× in prefixes adds ~2 probe depths,
+  and once the prefix table outgrows cache the per-probe constant is a memory latency:
+  log₂(28.6 M) ≈ 25 dependent misses accounts for essentially all of the 776 ns.
+- **No silent cliff**: both families' curves are the flat-or-logarithmic shapes the structures
+  predict, at every point.
 
-1. **The hit path does not degrade** — an indexed structure has no search depth to grow.
-2. **The miss path does**, as groups densify and the bounded scan lengthens. The fix is known — a
-   256-bit occupancy bitmap per group, replacing the scan with a popcount — and is not worth its
-   cost at present scale.
-3. **The ranking inverts near 4×.** Both the dense index and the bitmap are fixed costs, so the
-   bitmap is the larger structure at 1× and the smaller one at 10×.
-4. **The bitmap's hit path falls off a cliff at 10×**, because what grows is the value array, and
-   a random probe into several gigabytes is a TLB miss as well as a cache miss.
+**Builds** (seconds; Add streaming half / Build sort-dedupe-fill half):
 
-**The real cliff is the build, not the query.** At 10× the sort input no longer fits alongside
-its output, which is why partitioned sorting is on the roadmap as headroom rather than as a
-response to a problem already felt.
+| | 1× | 4× | 10× |
+|---|---|---|---|
+| 32-bit add / build | 0.08 / 0.59 | 0.39 / 2.4 | 0.82 / 6.2 |
+| 128-bit add / build | 0.23 / 1.4 | 0.91 / 6.2 | 8.9 / **26.7** |
 
-*Synthetic figures use a uniform distribution, which is simultaneously the pessimistic case for
-the miss path and the optimistic case for cache behaviour — the real 1× miss measured 35 ns
-against the synthetic 101 ns. Treat the 10× miss figure as an upper bound.*
+**Peak build memory, measured as a function of n** (`TestBuildMemoryCurve`: each point a fresh
+subprocess, true MaxRSS). The measured points fit a simple model — **peak ≈ 1.4 × live set**,
+the 1.4 being GC headroom — where, for value width V, live is:
+
+- 32-bit: (9 + 2V) bytes per entry + the fixed 67 MB index (+ the caller's own input)
+- 128-bit: (35 + 2V) bytes per entry (+ the caller's own input)
+
+Validated where the machine had room: at V=4, the model predicts 2.9 GB for the 32-bit 10× build
+(measured 3.0 GB) and 3.3 GB for the 128-bit 4× (measured 3.4 GB). **The 128-bit 10× point is
+the fit boundary on this machine**: the model wants ~8.3 GB alongside the OS on a 16 GB box, and
+what was observed instead is MaxRSS plateauing at 4.2 GB while the build went superlinear
+(6.2 s → 26.7 s for 2.5× the data) — inferred memory compression, the box paying in time what it
+no longer had in space. So the sizing rule, stated rather than discovered: **keep
+1.4·(35+2V)·n plus your input under about two-thirds of RAM** — on 16 GB that is roughly 175 M
+128-bit entries built bare; the sweep's 100 M point, held alongside its own 1.6 GB of input,
+had already crossed the line. 32-bit builds are ~2.5× cheaper per entry. Past the line the build slows first and fails loudly (OOM) second; it does
+not produce a wrong artifact — everything written is checksummed and canonical regardless.
+
+**Where it stops working, and how it fails** (the phase's adversarial question):
+
+- The builder refuses its 2³²−1-th entry with an error — the count must fit the artifact's
+  32-bit offsets; test-pinned at the boundary.
+- An oversized build degrades visibly (time) and then loudly (OOM). No path degrades silently:
+  the lookup curves above are the structure's predicted shapes, and an artifact that builds is
+  byte-canonical and CRC-verified whatever the memory weather was.
+- The known future lever for the populated-group miss — a 256-bit occupancy bitmap per /24
+  replacing the scan with a popcount — remains not worth its cost: the scan path moved 151→177 ns
+  over a 10× range.
 
 ## Trade-offs taken
 
