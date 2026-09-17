@@ -40,9 +40,12 @@ against every key:
 | General-purpose mmap hash table | 2,282 MB | 98 ns |
 | Prefix/CIDR encoding | 1,174 MB | — |
 
-The prefix-split index is the smallest by a wide margin, and its **hit path does not degrade with
-scale** — measured flat across a tenfold range, because an indexed structure has no search depth
-to grow.
+The prefix-split index is the smallest by a wide margin, and its **hit cost has no search depth
+to grow**: swept across a tenfold range on the shipped library, the 32-bit hit moved only with
+cache reach (140→207 ns) and the miss into empty space stayed flat at 23 ns; the 128-bit hit
+follows its binary search over distinct prefixes, logarithmically (304→776 ns at 28.6 M
+prefixes). The full curves, and their caveats, are in
+[architecture](architecture.md#behaviour-under-scale).
 
 ## Why it is worth building rather than buying
 
@@ -62,6 +65,7 @@ cache misses.
 
 ## Status
 
-The design is settled and measured against real data at scale. The implementation is being built
-to a phased plan with per-phase exit criteria and an adversarial review at each gate — see
-[roadmap](roadmap.md).
+Built and verified: library, artifact format and CLI, exhaustively tested at 10⁸ scale, hardened
+by a full adversarial audit ([docs/audits/](audits/audit-findings.md)) and swept for scale
+behaviour. The public release is the remaining phase; the API is not stable until it ships. The
+plan it was built to: [roadmap](roadmap.md).
