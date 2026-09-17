@@ -270,6 +270,28 @@ func TestCorruptionCorpus(t *testing.T) {
 			t.Skip("no adjacent pair in this artifact")
 			return b
 		}},
+		{"128-bit suffixes unsorted", ErrCorrupt, func(t *testing.T, b []byte) []byte {
+			// Swap the first two suffixes of a multi-entry group — pidx and the
+			// prefixes stay valid, checksums repaired, only the order rule can
+			// object. The swap must stay inside one group: across a boundary the
+			// result can still be legally ordered.
+			poff, pl := section(b, s6Pidx)
+			soff, _ := section(b, s6Suffix)
+			for g := uint64(0); pl >= 8 && g < pl/4-1; g++ {
+				lo, hi := le().Uint32(b[poff+g*4:]), le().Uint32(b[poff+(g+1)*4:])
+				if hi-lo >= 2 {
+					i := soff + uint64(lo)*8
+					var tmp [8]byte
+					copy(tmp[:], b[i:i+8])
+					copy(b[i:i+8], b[i+8:i+16])
+					copy(b[i+8:i+16], tmp[:])
+					fixSectionCRC(b, s6Suffix)
+					return b
+				}
+			}
+			t.Skip("no 128-bit group with two entries in this artifact")
+			return b
+		}},
 		{"128-bit prefix order broken", ErrCorrupt, func(t *testing.T, b []byte) []byte {
 			off, l := section(b, s6Prefix)
 			if l < 16 {
@@ -331,6 +353,62 @@ func TestCorruptionCorpus(t *testing.T) {
 		t.Run("interned/"+c.name, func(t *testing.T) { run(t, interned, c) })
 	}
 	t.Run("interned/"+internedOnly.name, func(t *testing.T) { run(t, interned, internedOnly) })
+
+	// Crafted, not mutated: the interned flag with zero entries in either
+	// family. No build can produce it (the flag follows Distinct, which needs an
+	// Add), it once opened cleanly, and its re-serialisation neither matched the
+	// file nor was itself accepted — the one canonicality hole the audit found.
+	t.Run("crafted/interned but empty", func(t *testing.T) {
+		const valLen, distinct = 4, 1
+		f := make([]byte, headerSize+8) // header + the value table, padded to 8
+		copy(f, magic[:])
+		le().PutUint32(f[8:], formatVersion)
+		le().PutUint32(f[12:], flagInterned)
+		le().PutUint32(f[16:], valLen)
+		le().PutUint32(f[20:], 1) // idWidth(1)
+		le().PutUint64(f[56:], distinct)
+		for i := 0; i < numSections; i++ {
+			le().PutUint64(f[80+i*24:], headerSize) // every empty slot sits at 280
+		}
+		at := 80 + sTab*24
+		le().PutUint64(f[at+8:], distinct*valLen)
+		le().PutUint32(f[at+16:], crc32.ChecksumIEEE(f[headerSize:headerSize+distinct*valLen]))
+		fixHeaderCRC(f)
+		m, err := openTemp(t, f)
+		if err == nil {
+			m.Close()
+			t.Fatal("an interned artifact with no entries was accepted")
+		}
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("error %v, want %v", err, ErrCorrupt)
+		}
+	})
+}
+
+// Close is documented idempotent, concurrent calls included: racing Closes on
+// one Map must neither double-release nor call through a half-cleared field.
+// The teeth are the -race pass — a bare nil-check here was a demonstrated
+// check-then-act crash.
+func TestConcurrentCloseSameMap(t *testing.T) {
+	_, raw := artifact(t, 47, 60, Options{ValLen: testValLen})
+	m, err := openTemp(t, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := m.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := m.Close(); err != nil { // and once more, sequentially
+		t.Fatal(err)
+	}
 }
 
 // Anything Open accepts must serve lookups without panicking and re-serialise

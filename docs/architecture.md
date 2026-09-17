@@ -57,11 +57,11 @@ was written twice by accident.
 | Group lookup | **dense index**, 2²⁴ entries | **sorted prefix table**, binary-searched |
 | Why | 2²⁴ × 4 B = 67 MB, affordable | 2⁶⁴ cannot be indexed at any density |
 | Suffix | 1 byte | 8 bytes |
-| Byte order on disk | native | **network order**, so comparison needs no per-probe conversion |
+| Byte order on disk | little-endian | little-endian, the same — keys load and compare as native `uint64` words |
 
-The asymmetry in byte order is deliberate: a 32-bit key fits a register and compares in one
-instruction, so storing it big-endian would only add a swap. A 128-bit key does not, and network
-order lets a comparison run over the bytes directly.
+There is no byte-order asymmetry: the artifact is little-endian throughout, and a 128-bit key is
+held as two host-order words compared numerically — never as bytes — so no per-probe conversion
+exists to avoid.
 
 Measured for the 128-bit family, 193 million addresses across 4,414,877 distinct 64-bit prefixes
 (≈44 addresses each):

@@ -63,6 +63,40 @@ func TestBuildReceipt(t *testing.T) {
 	}
 }
 
+// -in - reads the spec from stdin, as the flag help promises; errors then cite
+// "stdin" as the file name. The artifact must be byte-identical to a file build.
+func TestBuildFromStdin(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "out.ipmap")
+	code, _, errs := exec(t, spec, "build", "-in", "-", "-out", db)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	fromStdin, err := os.ReadFile(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := os.ReadFile(buildArtifact(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The build epoch is stamped at build time; the two runs may straddle a
+	// second, so compare everything but the epoch field (bytes 24..32).
+	fromStdin, fromFile = append([]byte(nil), fromStdin...), append([]byte(nil), fromFile...)
+	copy(fromStdin[24:32], make([]byte, 8))
+	copy(fromFile[24:32], make([]byte, 8))
+	copy(fromStdin[272:276], make([]byte, 4)) // header CRC covers the epoch
+	copy(fromFile[272:276], make([]byte, 4))
+	if !bytes.Equal(fromStdin, fromFile) {
+		t.Fatal("a stdin build differs from the same spec built from a file")
+	}
+
+	code, _, errs = exec(t, "not-an-address aa\n", "build", "-in", "-", "-out", db)
+	if code != 1 || !strings.Contains(errs, "stdin:1:") {
+		t.Fatalf("exit %d, stderr %q; want a stdin:1: error", code, errs)
+	}
+}
+
 func TestBuildErrorsCarryLineNumbers(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {
@@ -132,7 +166,7 @@ func TestVerifyGolden(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if want := "ok: 2 v4 + 1 v6 addresses, value width 3\n"; out != want {
+	if want := "ok: 2 v4 + 1 v6 addresses, value width 3, 1 duplicates dropped (1 conflicting)\n"; out != want {
 		t.Fatalf("golden mismatch:\n got %q\nwant %q", out, want)
 	}
 }

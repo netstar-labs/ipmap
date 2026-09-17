@@ -29,11 +29,20 @@ func (v *values) get(i int) []byte {
 	if v.direct != nil {
 		return v.direct[i*v.valLen : (i+1)*v.valLen : (i+1)*v.valLen]
 	}
+	id := v.id(i)
+	return v.tab[id*v.valLen : (id+1)*v.valLen : (id+1)*v.valLen]
+}
+
+// id decodes entry i's packed value id. This is the one decoder: the open-time
+// validator bounds ids with the same code the lookup path decodes with, so the
+// two cannot drift — a drifted decode would turn the open-time guarantee into
+// a query-time panic. Small enough to inline everywhere it is called.
+func (v *values) id(i int) int {
 	id := 0
 	for b := v.idW - 1; b >= 0; b-- {
 		id = id<<8 | int(v.ids[i*v.idW+b])
 	}
-	return v.tab[id*v.valLen : (id+1)*v.valLen : (id+1)*v.valLen]
+	return id
 }
 
 // idWidth is the narrowest byte width that holds ids for n distinct values

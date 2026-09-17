@@ -5,10 +5,11 @@ many times, with no allocation per query. Where a CIDR library answers *which pr
 address*, `ipmap` answers *what is stored against this exact address*, across hundreds of
 millions of them.
 
-> **Status: under construction.** The library is implemented through the artifact format —
-> build, lookup, interning, `WriteTo`/`Open` with full verification — and exhaustively verified
-> at 10⁸ scale. Hardening (the full audit) and the public release are still ahead; the API is not yet stable. The
-> plan: [docs/roadmap.md](docs/roadmap.md).
+> **Status: under construction.** The library and the CLI are implemented — build, lookup,
+> interning, `WriteTo`/`Open` with full verification, and the four subcommands under golden
+> tests — exhaustively verified at 10⁸ scale, and hardened by a full adversarial audit
+> ([docs/audits/](docs/audits/)). The public release is still ahead; the API is not yet stable.
+> The plan: [docs/roadmap.md](docs/roadmap.md).
 
 ## Why
 
@@ -47,6 +48,7 @@ in common.
 
 **Deep dive**
 - [docs/architecture.md](docs/architecture.md) — the structures, the measurements, the trade-offs
+- [docs/audits/](docs/audits/) — the adversarial audit: every claim, verdict, and fix
 
 **Operations**
 - [docs/userguide.md](docs/userguide.md) — the CLI, the spec format, the artifact format
@@ -55,7 +57,7 @@ in common.
 - [docs/roadmap.md](docs/roadmap.md) — phases, exit criteria, the test and benchmark inventory
 
 **Examples**
-- [example/README.md](example/README.md) — one runnable program per way the library is used
+- [example/README.md](example/README.md) — runnable demonstrations, starting with embedding the library
 
 ## Layout
 
@@ -65,7 +67,7 @@ in common.
 | `app/ipmap/` | The CLI — `build`, `lookup`, `verify`, `stats` |
 | `pkg/` | Sub-packages, as the library outgrows a flat root |
 | `docs/` | The documentation set above |
-| `example/` | Runnable demonstrations, one per usage pattern |
+| `example/` | Runnable demonstrations |
 | `build/ipmap` | The tracked build script |
 
 ## Requirements

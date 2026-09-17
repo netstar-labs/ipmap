@@ -59,10 +59,15 @@ func corpusRun(t *testing.T, path, expect string) {
 	// get duplicate bookkeeping and salted-conflict injection; the rest are
 	// added with salt 0, so their expected value needs no state at all.
 	const trackCap = 2_000_000
-	tracked := make(map[netip.Addr]byte, trackCap)
+	type track struct {
+		salt   byte   // current value salt; bumping it injects a conflict
+		adds   uint32 // every add of this address
+		atSalt uint32 // adds since the last bump — these agree with the survivor
+	}
+	tracked := make(map[netip.Addr]track, trackCap)
 
 	b := NewBuilder(Options{ValLen: testValLen, Intern: true})
-	var lines, conflicts int
+	var lines int
 	start := time.Now()
 	scan(t, path, func(line []byte) {
 		a, ok := parseAny(line)
@@ -70,17 +75,25 @@ func corpusRun(t *testing.T, path, expect string) {
 			t.Fatalf("unparseable address %q", line)
 		}
 		a = a.Unmap()
-		salt, seen := tracked[a]
+		tr, seen := tracked[a]
 		if seen {
-			if lines%16 == 0 { // inject a conflicting re-add now and then
-				salt++
-				conflicts++
+			// Inject a conflicting re-add now and then. The salt never wraps:
+			// valC is distinct across salts only within one 256-run, and a wrap
+			// would let a drop collide with the survivor and skew the tally.
+			if lines%16 == 0 && tr.salt < 255 {
+				tr.salt++
+				tr.atSalt = 0
 			}
-			tracked[a] = salt
+			tr.adds++
+			tr.atSalt++
+			tracked[a] = tr
 		} else if len(tracked) < trackCap {
-			tracked[a] = 0
+			tr = track{adds: 1, atSalt: 1}
+			tracked[a] = tr
+		} else {
+			tr = track{} // untracked: always salt 0, so duplicates always agree
 		}
-		if err := b.Add(a, valC(a, salt)); err != nil {
+		if err := b.Add(a, valC(a, tr.salt)); err != nil {
 			t.Fatal(err)
 		}
 		lines++
@@ -88,6 +101,12 @@ func corpusRun(t *testing.T, path, expect string) {
 	m, err := b.Build()
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The independent conflict tally, survivor semantics: every add before an
+	// address's final salt carries a value different from the one that wins.
+	var conflicts int
+	for _, tr := range tracked {
+		conflicts += int(tr.adds - tr.atSalt)
 	}
 	st := m.Stats()
 	unique := st.Addrs4 + st.Addrs6
@@ -161,7 +180,7 @@ func corpusRun(t *testing.T, path, expect string) {
 	scan(t, path, func(line []byte) {
 		a, _ := parseAny(line)
 		a = a.Unmap()
-		salt := tracked[a] // zero for untracked, by construction
+		salt := tracked[a].salt // zero for untracked, by construction
 		got, ok := opened.Lookup(a)
 		if !ok || !bytes.Equal(got, valC(a, salt)) {
 			t.Fatalf("opened Lookup(%v) = %x,%v; want %x", a, got, ok, valC(a, salt))

@@ -1,6 +1,7 @@
 package ipmap
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"net/netip"
@@ -74,7 +75,11 @@ func (b *Builder) Add(addr netip.Addr, val []byte) error {
 	if len(val) != b.opt.ValLen {
 		return fmt.Errorf("ipmap: value is %d bytes, ValLen is %d", len(val), b.opt.ValLen)
 	}
-	if b.n > math.MaxUint32 {
+	// >= not >: the entry count itself must fit uint32 — the stores' offset
+	// arrays end with a sentinel equal to the count. Off by one, the 2^32-th
+	// entry wraps that sentinel to zero: a silent universal miss in the 32-bit
+	// family, a slice panic in the 128-bit one.
+	if b.n >= math.MaxUint32 {
 		return fmt.Errorf("ipmap: too many entries")
 	}
 	vi := uint32(b.n)
@@ -152,16 +157,23 @@ func (b *Builder) build4(m *Map) {
 	slices.Sort(b.v4) // by address, then by value index: last-added sorts last
 
 	// Dedupe keeping the last of each address run, counting what was dropped.
+	// Conflicts are measured against the run's survivor, not the next entry in
+	// line — DupConflicts answers "how many drops lost information", and only
+	// the survivor's value is kept.
 	kept := b.v4[:0]
-	for i := 0; i < len(b.v4); i++ {
-		if i+1 < len(b.v4) && b.v4[i+1]>>32 == b.v4[i]>>32 {
+	for i := 0; i < len(b.v4); {
+		j := i // j walks to the last entry of this address's run: the survivor
+		for j+1 < len(b.v4) && b.v4[j+1]>>32 == b.v4[j]>>32 {
+			j++
+		}
+		for k := i; k < j; k++ {
 			m.stats.Dups++
-			if !b.sameVal(uint32(b.v4[i]), uint32(b.v4[i+1])) {
+			if !b.sameVal(uint32(b.v4[k]), uint32(b.v4[j])) {
 				m.stats.DupConflicts++
 			}
-			continue
 		}
-		kept = append(kept, b.v4[i])
+		kept = append(kept, b.v4[j])
+		i = j + 1
 	}
 	m.stats.Addrs4 = len(kept)
 	if len(kept) == 0 {
@@ -178,13 +190,12 @@ func (b *Builder) build4(m *Map) {
 	for i := 1; i < len(s.idx); i++ {
 		s.idx[i] += s.idx[i-1]
 	}
-	cursor := make([]uint32, 1<<24)
-	for _, e := range kept {
-		g := e >> 40
-		at := s.idx[g] + cursor[g]
-		cursor[g]++
-		s.suffix[at] = uint8(e >> 32)
-		b.setVal(&s.vals, int(at), uint32(e))
+	// kept is sorted, so entry i's slot in its group is exactly i: the prefix
+	// sum already places every group's run contiguously in address order. No
+	// per-group cursor is needed — that is scatter machinery for unsorted input.
+	for i, e := range kept {
+		s.suffix[i] = uint8(e >> 32)
+		b.setVal(&s.vals, i, uint32(e))
 	}
 }
 
@@ -206,16 +217,21 @@ func (b *Builder) build6(m *Map) {
 		return 0
 	})
 
+	// Same run-based dedupe as build4: conflicts count against the survivor.
 	kept := b.v6[:0]
-	for i := 0; i < len(b.v6); i++ {
-		if i+1 < len(b.v6) && b.v6[i+1].a == b.v6[i].a {
+	for i := 0; i < len(b.v6); {
+		j := i
+		for j+1 < len(b.v6) && b.v6[j+1].a == b.v6[j].a {
+			j++
+		}
+		for k := i; k < j; k++ {
 			m.stats.Dups++
-			if !b.sameVal(b.v6[i].vi, b.v6[i+1].vi) {
+			if !b.sameVal(b.v6[k].vi, b.v6[j].vi) {
 				m.stats.DupConflicts++
 			}
-			continue
 		}
-		kept = append(kept, b.v6[i])
+		kept = append(kept, b.v6[j])
+		i = j + 1
 	}
 	m.stats.Addrs6 = len(kept)
 
@@ -241,12 +257,5 @@ func (b *Builder) sameVal(vi, vj uint32) bool {
 		return b.ids[vi] == b.ids[vj]
 	}
 	n := b.opt.ValLen
-	x := b.vals[int(vi)*n : int(vi+1)*n]
-	y := b.vals[int(vj)*n : int(vj+1)*n]
-	for i := range x {
-		if x[i] != y[i] {
-			return false
-		}
-	}
-	return true
+	return bytes.Equal(b.vals[int(vi)*n:int(vi+1)*n], b.vals[int(vj)*n:int(vj+1)*n])
 }

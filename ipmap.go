@@ -17,8 +17,9 @@
 // time and never interprets them, which is what lets one library serve callers
 // whose payloads have nothing in common.
 //
-// Status: under construction. See docs/roadmap.md for what is built and what is
-// not; the public API below is not yet stable.
+// Status: under construction. The README's status note says what is built so
+// far and docs/roadmap.md holds the plan; the public API below is not yet
+// stable.
 package ipmap
 
 import "errors"

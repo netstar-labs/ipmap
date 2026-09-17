@@ -183,13 +183,15 @@ func Open(path string) (*Map, error) {
 
 // Close releases the mapping. Lookups against the Map, and values previously
 // returned by them, must not be used after Close. A Map from Build has nothing
-// to release and Close is a no-op.
+// to release and Close is a no-op. Close is idempotent, including concurrently
+// — but it does not synchronise with lookups: a lookup racing a Close is a
+// use-after-free by the rule above, and no locking here could absolve it.
 func (m *Map) Close() error {
-	if m.close != nil {
-		c := m.close
-		m.close = nil
-		c()
-	}
+	m.closeOnce.Do(func() {
+		if m.close != nil {
+			m.close()
+		}
+	})
 	return nil
 }
 
@@ -197,7 +199,7 @@ func (m *Map) Close() error {
 func openBytes(data []byte) (*Map, error) {
 	le := binary.LittleEndian
 	if len(data) < headerSize || [8]byte(data[:8]) != magic {
-		return nil, fmt.Errorf("%w", ErrFormat)
+		return nil, ErrFormat
 	}
 	if crc32.ChecksumIEEE(data[:272]) != le.Uint32(data[272:]) {
 		return nil, fmt.Errorf("header checksum: %w", ErrCorrupt)
@@ -239,6 +241,10 @@ func openBytes(data []byte) (*Map, error) {
 		n6 > 0 && np == 0,
 		dups > math.MaxInt64 || confl > dups,
 		interned && (idW != idWidth(int(distinct)) || distinct == 0 || distinct > math.MaxUint32),
+		// An interned flag with no entries is unreachable from a build (the flag
+		// follows Distinct, and Distinct needs an Add) — and such a file would
+		// not re-serialise to itself, breaking accepted-implies-canonical.
+		interned && n4+n6 == 0,
 		!interned && (idW != 0 || distinct != 0):
 		return nil, fmt.Errorf("header counts: %w", ErrCorrupt)
 	}
@@ -333,52 +339,30 @@ func (m *Map) validate() error {
 	bad := func(what string) error { return fmt.Errorf("%s: %w", what, ErrCorrupt) }
 
 	if n := m.stats.Addrs4; n > 0 {
-		s := &m.s4
-		if s.idx[0] != 0 || int(s.idx[len(s.idx)-1]) != n {
-			return bad("32-bit index bounds")
-		}
-		for i := 1; i < len(s.idx); i++ {
-			lo, hi := s.idx[i-1], s.idx[i]
-			if hi < lo {
-				return bad("32-bit index order")
-			}
-			for j := lo + 1; j < hi; j++ { // strictly ascending within a group
-				if s.suffix[j-1] >= s.suffix[j] {
-					return bad("32-bit suffix order")
-				}
-			}
+		// A dense-index group may be empty (minGroup 0): most /24s hold nothing.
+		if err := checkGroups(m.s4.idx, m.s4.suffix, n, 0, "32-bit"); err != nil {
+			return err
 		}
 	}
 	if n := m.stats.Addrs6; n > 0 {
 		s := &m.s6
-		if s.pidx[0] != 0 || int(s.pidx[len(s.pidx)-1]) != n {
-			return bad("128-bit index bounds")
-		}
 		for i := 1; i < len(s.prefix); i++ {
 			if s.prefix[i-1] >= s.prefix[i] {
 				return bad("128-bit prefix order")
 			}
 		}
-		for i := 1; i < len(s.pidx); i++ {
-			lo, hi := s.pidx[i-1], s.pidx[i]
-			if hi <= lo { // a listed prefix owns at least one entry
-				return bad("128-bit group bounds")
-			}
-			for j := lo + 1; j < hi; j++ {
-				if s.suffix[j-1] >= s.suffix[j] {
-					return bad("128-bit suffix order")
-				}
-			}
+		// A listed prefix owns at least one entry (minGroup 1) — an empty group
+		// would be a prefix the writer had no reason to list.
+		if err := checkGroups(s.pidx, s.suffix, n, 1, "128-bit"); err != nil {
+			return err
 		}
 	}
 	if m.interned() {
 		checkIDs := func(v *values, n int) error {
 			for i := 0; i < n; i++ {
-				id := 0
-				for b := v.idW - 1; b >= 0; b-- {
-					id = id<<8 | int(v.ids[i*v.idW+b])
-				}
-				if id >= m.stats.Distinct {
+				// v.id is the lookup path's own decoder: the bound proven here is
+				// the bound the reader will rely on, by construction.
+				if v.id(i) >= m.stats.Distinct {
 					return bad("value id out of table")
 				}
 			}
@@ -398,10 +382,34 @@ func (m *Map) validate() error {
 	return nil
 }
 
+// checkGroups validates one family's group geometry: offsets start at zero and
+// end exactly at n, groups never run backwards or fall below minGroup entries,
+// and suffixes ascend strictly within each group. One function for both
+// families, so every corruption-corpus case that exercises one family's
+// checking is also proof the other family checks the same way.
+func checkGroups[S uint8 | uint64](idx []uint32, suffix []S, n, minGroup int, family string) error {
+	bad := func(what string) error { return fmt.Errorf("%s %s: %w", family, what, ErrCorrupt) }
+	if idx[0] != 0 || int(idx[len(idx)-1]) != n {
+		return bad("index bounds")
+	}
+	for i := 1; i < len(idx); i++ {
+		lo, hi := idx[i-1], idx[i]
+		if hi < lo || int(hi-lo) < minGroup {
+			return bad("group bounds")
+		}
+		for j := lo + 1; j < hi; j++ { // strictly ascending within a group
+			if suffix[j-1] >= suffix[j] {
+				return bad("suffix order")
+			}
+		}
+	}
+	return nil
+}
+
 func pad8(n int) int { return (n + 7) &^ 7 }
 
-// Epoch reports when the artifact was built, unix seconds. Zero for a Map that
-// has not been through a file.
+// Epoch reports when the artifact was built, unix seconds. It is stamped by
+// Build and carried by the artifact, so it survives WriteTo and Open.
 func (m *Map) Epoch() int64 { return m.epoch }
 
 func nowEpoch() int64 { return time.Now().Unix() }
