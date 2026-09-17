@@ -1,7 +1,7 @@
 # ipmap — user guide
 
 > **v0.1.0.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
-> practice, not yet promised. See the [release decision](decisions/0001-public-release.md).
+> practice, not yet promised.
 
 ## Install
 

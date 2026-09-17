@@ -10,8 +10,7 @@ millions of them.
 > behaviour at 10⁸ entries per family ([architecture](docs/architecture.md#behaviour-under-scale)).
 > The **artifact format is frozen at version 1** — a reader refuses anything it does not
 > recognise rather than guessing. The **Go API is v0.x**: stable in practice, not yet promised,
-> because it has had no outside consumer to prove it sufficient. Why that choice, and what was
-> audited before publishing: [docs/decisions/](docs/decisions/0001-public-release.md).
+> because it has had no outside consumer to prove it sufficient.
 
 ## Why
 
@@ -62,10 +61,9 @@ in common.
 **Operations**
 - [docs/userguide.md](docs/userguide.md) — the CLI, the spec format, the artifact format
 
-**Plan and decisions**
+**Plan**
 - [docs/roadmap.md](docs/roadmap.md) — phases, exit criteria, the test and benchmark inventory,
   and the levers deliberately not taken
-- [docs/decisions/](docs/decisions/) — the decision records, starting with the public release
 
 **Examples**
 - [example/README.md](example/README.md) — four runnable demonstrations: embedding, building with
