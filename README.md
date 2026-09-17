@@ -85,7 +85,7 @@ in common.
 
 ## Requirements
 
-Go 1.25 or newer. **No dependencies outside the standard library**, and none are planned — a
+Go 1.26 or newer. **No dependencies outside the standard library**, and none are planned — a
 dependency this low in the stack becomes a dependency for everything above it.
 
 ## License

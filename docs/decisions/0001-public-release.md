@@ -1,6 +1,6 @@
 # 0001 — Public release
 
-*Decided 2026-09-17. Status: accepted.*
+*Decided 2026-09-16. Status: accepted.*
 
 Release `ipmap` publicly under Apache-2.0, as `github.com/netstar-labs/ipmap`, tagged `v0.1.0`,
 with the full documentation set including the roadmap and the audit record.
@@ -25,8 +25,8 @@ stack is easier to trust when its construction can be read.
 | **R4 — nothing non-public in the repo or its history** | Every path ever committed enumerated across all revisions: 43 source/doc/config files plus the fuzz corpora, nothing else. Largest blob ever committed: 19.9 KB. No corpora, no fixtures, no binaries. A CI check rejects any blob over 5 MB history-wide |
 | **R4 — beyond the repo** | Issue and pull-request bodies (all 21 + 20) and commit messages swept on the same term list — they become public with the repo, which R4's wording does not say and should |
 | **R2 — no consumer domain knowledge** | Term sweep over tree, full history, and GitHub metadata: zero hits for any product, dataset, organisation, host, or path. The only domains that appear anywhere are `github.com` module paths |
-| **Doc set true against the shipped code** | The P7 audit's doc-drift dimension (10/10 findings fixed), the post-P8 sweep (executive-summary's stale status and its contradicted scale claim), and a cold-reviewer pass — see below. Mechanical claims re-checked at release: `go.mod` = Go 1.25 (matches the README), dependency list is standard library only, the `Err*` table matches `ipmap.go` |
-| **Licence** | Apache-2.0, holder `NetSTAR Global, Inc.`, root file only, no per-file headers — copied byte-identical from the sibling repositories so the org's licence text has exactly one spelling. The README carries the licence line in the house format |
+| **Doc set true against the shipped code** | The P7 audit's doc-drift dimension (10/10 findings fixed), the post-P8 sweep (executive-summary's stale status and its contradicted scale claim), and a cold-reviewer pass — see below. Mechanical claims re-checked at release: `go.mod` = Go 1.26 (matches the README), dependency list is standard library only, the `Err*` table matches `ipmap.go` |
+| **Licence** | Apache-2.0, holder `NetStar Global, Inc.` — the registered entity, not the `NetSTAR` brand styling the sibling repositories' `LICENSE` files carry. The README carries the licence line in the house format |
 | **Cold reviewer, twice** | Two reviewers with no prior exposure, the second fresh to the corrections the first produced. Each built the CLI, wrote a spec, ran every subcommand and all four examples, and wrote external programs against the library from the documentation alone — compiling on the first attempt both times. Both verdicts: **yes, with friction**. The second verified the rewritten size formulas against 19 artifacts across six value widths and both families, finding **0 bytes of error in every case**, and re-derived the architecture document's 2,179 MB measurement from them independently. Every finding from both rounds is listed below, and every one was fixed before release |
 
 ## What the release audit found and fixed
