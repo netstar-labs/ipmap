@@ -83,7 +83,10 @@ func parseAddr4(b []byte) (uint32, bool) {
 		}
 		ip = ip<<8 | uint32(v)
 	}
-	return ip, octets == 4
+	if octets != 4 {
+		return 0, false // never leak a partial parse with the failure bit
+	}
+	return ip, true
 }
 
 // parseAddr6 parses a textual 128-bit address without allocating: full and
@@ -111,8 +114,10 @@ func parseAddr6(b []byte) (addr6, bool) {
 		}
 	}
 	for i < len(b) {
-		// A dotted quad may only appear last and fills two groups.
-		if v4, ok := trailingQuad(b[i:]); ok {
+		// A dotted quad may only appear last and fills two groups. parseAddr4
+		// demands the whole remainder be a quad, which is exactly the rule:
+		// anything after it could only be another separator, and that fails here.
+		if v4, ok := parseAddr4(b[i:]); ok {
 			if n > 6 {
 				return addr6{}, false
 			}
@@ -179,25 +184,6 @@ func parseAddr6(b []byte) (addr6, bool) {
 		a.lo = a.lo<<16 | uint64(groups[4+j])
 	}
 	return a, true
-}
-
-// trailingQuad reports whether s is exactly a dotted quad and returns it
-// packed. It shares parseAddr4's rules, leading-zero rejection included.
-func trailingQuad(s []byte) (uint32, bool) {
-	dots := 0
-	for _, c := range s {
-		switch {
-		case c == '.':
-			dots++
-		case c >= '0' && c <= '9':
-		default:
-			return 0, false
-		}
-	}
-	if dots != 3 {
-		return 0, false
-	}
-	return parseAddr4(s)
 }
 
 func isHex(c byte) bool {

@@ -2,6 +2,7 @@ package ipmap
 
 import (
 	"bytes"
+	"math"
 	"math/rand/v2"
 	"net/netip"
 	"testing"
@@ -257,9 +258,28 @@ func testDuplicateRule(t *testing.T, opt Options) {
 	if st.Dups != 4 {
 		t.Fatalf("Dups = %d, want 4", st.Dups)
 	}
-	// Conflicts: 1→1 agrees; 1→2 and 2→3 differ; 7→8 differs.
-	if st.DupConflicts != 3 {
-		t.Fatalf("DupConflicts = %d, want 3", st.DupConflicts)
+	// Conflicts are measured against each run's survivor, not the next add in
+	// line: a's survivor is 3, so all three drops (1, 1, 2) conflict — the
+	// adjacent-pair reading would say 2 here, which is the bug this pins.
+	// six's dropped 7 conflicts with its survivor 8.
+	if st.DupConflicts != 4 {
+		t.Fatalf("DupConflicts = %d, want 4", st.DupConflicts)
+	}
+}
+
+// The entry cap is the count fitting uint32: the stores' offset arrays end
+// with a sentinel equal to the count, so the 2^32-th entry would wrap it to
+// zero — a silent universal miss in one family, a slice panic in the other.
+// White-box: the sequence counter is set directly, since 2^32 real Adds would
+// need tens of gigabytes to demonstrate an off-by-one.
+func TestAddRefusesAtEntryCap(t *testing.T) {
+	b := NewBuilder(Options{ValLen: 1})
+	b.n = math.MaxUint32 - 1
+	if err := b.Add(netip.MustParseAddr("1.2.3.4"), []byte{1}); err != nil {
+		t.Fatalf("the last representable entry was refused: %v", err)
+	}
+	if err := b.Add(netip.MustParseAddr("1.2.3.5"), []byte{1}); err == nil {
+		t.Fatal("the entry that would wrap the count was admitted")
 	}
 }
 

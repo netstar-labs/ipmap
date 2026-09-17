@@ -70,14 +70,14 @@ answering.
 ## The CLI
 
 ```
-ipmap build  -in <spec> -out <artifact> [-intern]   compile a text spec into an artifact
-ipmap lookup -db <artifact> <addr> [...]   query it; also reads addresses on stdin
-ipmap verify -db <artifact>                check an artifact's invariants
-ipmap stats  -db <artifact>                entry counts, value width, family breakdown
+ipmap build  -in <spec> -out <artifact> [-intern]   compile a text spec (-in - reads stdin)
+ipmap lookup -db <artifact> [-json] <addr> [...]    query it; reads stdin when no args are given
+ipmap verify -db <artifact>                         check an artifact's invariants
+ipmap stats  -db <artifact> [-json]                 entry counts, value width, family breakdown
 ```
 
-Human-readable by default; `-json` for pipelines. `verify` exits non-zero on any violation, so it
-is usable as a build gate.
+Human-readable by default; `lookup` and `stats` take `-json` for pipelines. `verify` exits
+non-zero on any violation, so it is usable as a build gate.
 
 ## The spec format
 
@@ -118,7 +118,8 @@ lookup returns something plausible but wrong.
 ## Operational notes
 
 **Sizing.** Budget roughly 4.6 bytes per 32-bit address and 11 bytes per 128-bit address, plus
-the value table when interning. The dense index is a fixed 67 MB regardless of entry count.
+the value table when interning. The dense index is a fixed 67 MB regardless of entry count — and
+omitted entirely when the artifact has no 32-bit entries.
 
 **Building.** Peak memory is dominated by the sort, which is proportional to entry count. The
 figure is recorded per release in [architecture](architecture.md); check it before building a

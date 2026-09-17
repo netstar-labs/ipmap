@@ -1,7 +1,7 @@
 // Command ipmap builds and queries an ipmap artifact.
 //
 //	ipmap build  -in <spec> -out <artifact> [-intern]   compile a text spec
-//	ipmap lookup -db <artifact> [-json] <addr> ...      query; also reads stdin
+//	ipmap lookup -db <artifact> [-json] <addr> ...      query; stdin when no args
 //	ipmap verify -db <artifact>                         exit non-zero unless valid
 //	ipmap stats  -db <artifact> [-json]                 what the artifact holds
 //
@@ -40,7 +40,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var err error
 	switch args[0] {
 	case "build":
-		err = build(args[1:], stderr)
+		err = build(args[1:], stdin, stderr)
 	case "lookup":
 		err = lookup(args[1:], stdin, stdout)
 	case "verify":
@@ -76,7 +76,7 @@ width is taken from the first entry.
 `)
 }
 
-func build(args []string, stderr io.Writer) error {
+func build(args []string, stdin io.Reader, stderr io.Writer) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	in := fs.String("in", "", "spec file (- for stdin)")
@@ -89,15 +89,19 @@ func build(args []string, stderr io.Writer) error {
 		return errors.New("build: -in and -out are required")
 	}
 
-	f, err := os.Open(*in)
-	if err != nil {
-		return err
+	src, name := stdin, "stdin" // the name errors cite: line numbers need a file
+	if *in != "-" {
+		f, err := os.Open(*in)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		src, name = f, *in
 	}
-	defer f.Close()
 
 	var b *ipmap.Builder
 	lineNo := 0
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		lineNo++
@@ -107,31 +111,31 @@ func build(args []string, stderr io.Writer) error {
 		}
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
-			return fmt.Errorf("%s:%d: want \"<address> <value-hex>\", got %d fields", *in, lineNo, len(fields))
+			return fmt.Errorf("%s:%d: want \"<address> <value-hex>\", got %d fields", name, lineNo, len(fields))
 		}
 		addr, err := netip.ParseAddr(fields[0])
 		if err != nil {
-			return fmt.Errorf("%s:%d: %v", *in, lineNo, err)
+			return fmt.Errorf("%s:%d: %v", name, lineNo, err)
 		}
 		val, err := hex.DecodeString(fields[1])
 		if err != nil {
-			return fmt.Errorf("%s:%d: value: %v", *in, lineNo, err)
+			return fmt.Errorf("%s:%d: value: %v", name, lineNo, err)
 		}
 		if b == nil { // the first entry sets the value width for the artifact
 			if len(val) == 0 {
-				return fmt.Errorf("%s:%d: empty value", *in, lineNo)
+				return fmt.Errorf("%s:%d: empty value", name, lineNo)
 			}
 			b = ipmap.NewBuilder(ipmap.Options{ValLen: len(val), Intern: *intern})
 		}
 		if err := b.Add(addr, val); err != nil {
-			return fmt.Errorf("%s:%d: %v", *in, lineNo, err)
+			return fmt.Errorf("%s:%d: %v", name, lineNo, err)
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return err
 	}
 	if b == nil {
-		return fmt.Errorf("%s: no entries", *in)
+		return fmt.Errorf("%s: no entries", name)
 	}
 	m, err := b.Build()
 	if err != nil {
@@ -252,7 +256,11 @@ func verify(args []string, stdout io.Writer) error {
 	}
 	defer m.Close()
 	st := m.Stats()
-	fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d\n", st.Addrs4, st.Addrs6, m.ValLen())
+	// The duplicate counts ride along unconditionally: a script comparing two
+	// verify receipts should see the same fields either way, and a duplicate
+	// carrying a different value means the input disagreed with itself.
+	fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d, %d duplicates dropped (%d conflicting)\n",
+		st.Addrs4, st.Addrs6, m.ValLen(), st.Dups, st.DupConflicts)
 	return nil
 }
 

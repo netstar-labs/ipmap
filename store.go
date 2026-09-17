@@ -3,6 +3,7 @@ package ipmap
 import (
 	"net/netip"
 	"sort"
+	"sync"
 )
 
 // Map answers lookups against a built set of addresses. It is immutable: any
@@ -14,7 +15,11 @@ type Map struct {
 	valLen int
 	epoch  int64 // unix seconds; set by Build, carried by the artifact
 	stats  Stats
-	close  func() error // releases the mapping; nil for a built Map
+
+	// closeOnce makes Close idempotent even when called concurrently — a bare
+	// nil-check is a check-then-act that can call a nil func under a race.
+	closeOnce sync.Once
+	close     func() error // releases the mapping; nil for a built Map
 }
 
 // Stats describes what a build produced. Duplicates are reported rather than
