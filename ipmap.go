@@ -24,7 +24,10 @@
 // prove it sufficient.
 package ipmap
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // Errors reported when opening an artifact. They are distinguished because the
 // operator response differs: a wrong file is a configuration mistake, an
@@ -56,4 +59,14 @@ type Options struct {
 	// feed of 10^8 addresses drawn from 10^5 distinct values pays for its
 	// values once rather than 10^8 times.
 	Intern bool
+
+	// Epoch is the build time stamped into the artifact. The zero value means
+	// "now", which is what an ordinary build wants.
+	//
+	// Set it when the build must be **reproducible**. An artifact is otherwise
+	// identified by its bytes but cannot be regenerated from its inputs, since
+	// two builds seconds apart differ in this field alone — which defeats
+	// content-addressing a build, and diffing a rebuild against a reference.
+	// A caller that needs either passes the date its inputs belong to.
+	Epoch time.Time
 }
