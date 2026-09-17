@@ -121,9 +121,11 @@ lookup returns something plausible but wrong.
 the value table when interning. The dense index is a fixed 67 MB regardless of entry count — and
 omitted entirely when the artifact has no 32-bit entries.
 
-**Building.** Peak memory is dominated by the sort, which is proportional to entry count. The
-figure is recorded per release in [architecture](architecture.md); check it before building a
-set substantially larger than the last one.
+**Building.** Peak memory is dominated by the sort, which is proportional to entry count:
+roughly 1.4 × (35 + 2·ValLen) bytes per 128-bit entry, 1.4 × (9 + 2·ValLen) per 32-bit entry
+plus the fixed index — measured, with the fit rule, in
+[architecture](architecture.md#behaviour-under-scale). Keep a build under about two-thirds of
+RAM: past that it slows first and OOMs second, and never writes a wrong artifact.
 
 **Reloading.** Build to a temporary path, verify, rename, then open the new file and drop the old
 mapping once in-flight readers have finished. Never write in place: a reader holding a mapping of
