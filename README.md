@@ -7,7 +7,7 @@ millions of them.
 
 > **Status: under construction.** The library is implemented through the artifact format —
 > build, lookup, interning, `WriteTo`/`Open` with full verification — and exhaustively verified
-> at 10⁸ scale. The CLI and the public release are still ahead; the API is not yet stable. The
+> at 10⁸ scale. Hardening (the full audit) and the public release are still ahead; the API is not yet stable. The
 > plan: [docs/roadmap.md](docs/roadmap.md).
 
 ## Why

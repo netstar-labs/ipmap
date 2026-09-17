@@ -1,8 +1,7 @@
 # ipmap — user guide
 
-> **Under construction.** The library — build, lookup, interning, the artifact — is implemented
-> and verified; the CLI is not yet. See [roadmap](roadmap.md) for the phase each piece belongs
-> to, and treat the API as unstable until the public release.
+> **Under construction.** The library and the CLI are implemented and verified; hardening and the
+> public release are still ahead. Treat the API as unstable until then — see [roadmap](roadmap.md).
 
 ## Install
 
@@ -70,10 +69,8 @@ answering.
 
 ## The CLI
 
-Designed, **not implemented yet** (roadmap P6):
-
 ```
-ipmap build  -in <spec> -out <artifact>    compile a text spec into an artifact
+ipmap build  -in <spec> -out <artifact> [-intern]   compile a text spec into an artifact
 ipmap lookup -db <artifact> <addr> [...]   query it; also reads addresses on stdin
 ipmap verify -db <artifact>                check an artifact's invariants
 ipmap stats  -db <artifact>                entry counts, value width, family breakdown
