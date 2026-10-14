@@ -70,5 +70,6 @@ cache misses.
 
 Built and verified: library, artifact format and CLI, exhaustively tested at 10⁸ scale, hardened
 by a full adversarial audit ([docs/audits/](audits/audit-findings.md)) and swept for scale
-behaviour. The public release is the remaining phase; the API is not stable until it ships. The
-plan it was built to: [roadmap](roadmap.md).
+behaviour. Released publicly as v0.2.1 under Apache-2.0. The artifact format is frozen at version 1;
+the Go API is v0.x — stable in practice, not yet promised. The plan it was built to:
+[roadmap](roadmap.md).

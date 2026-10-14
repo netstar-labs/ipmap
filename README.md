@@ -5,7 +5,7 @@ many times, with no allocation per query. Where a CIDR library answers *which pr
 address*, `ipmap` answers *what is stored against this exact address*, across hundreds of
 millions of them.
 
-> **Status: v0.1.0.** Library, artifact format and CLI, verified exhaustively at 10⁸ scale,
+> **Status: v0.2.1.** Library, artifact format and CLI, verified exhaustively at 10⁸ scale,
 > hardened by a full adversarial audit ([docs/audits/](docs/audits/)) and swept for scale
 > behaviour at 10⁸ entries per family ([architecture](docs/architecture.md#behaviour-under-scale)).
 > The **artifact format is frozen at version 1** — a reader refuses anything it does not
@@ -83,7 +83,7 @@ in common.
 
 ## Requirements
 
-Go 1.26 or newer. **No dependencies outside the standard library**, and none are planned — a
+Go 1.27 or newer. **No dependencies outside the standard library**, and none are planned — a
 dependency this low in the stack becomes a dependency for everything above it.
 
 ## License
