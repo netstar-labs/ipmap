@@ -6,7 +6,8 @@ promised. Newest first.
 ## v0.2.1
 
 - Add `SECURITY.md` (private reporting), `CONTRIBUTING.md` and this changelog.
-- Raise the minimum Go version to 1.27 (`go.mod`, README, user guide, roadmap).
+- Raise the minimum Go version to 1.27 (`go.mod`, README, user guide, roadmap), and the CI
+  staticcheck pin to v0.8.2 — v0.8.1 cannot read Go 1.27 export data.
 - Documentation catches up with v0.2.0: version labels, and the executive summary's status.
 
 ## v0.2.0
