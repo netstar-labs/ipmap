@@ -159,8 +159,8 @@ should try to prove at that gate.
 improvised one.
 
 **Exit.**
-- House scaffold: module `github.com/netstar-labs/ipmap`, **Go 1.25** (matching the sibling
-  library, so depending on `ipmap` never forces a consumer's toolchain bump) · root package *is*
+- House scaffold: module `github.com/netstar-labs/ipmap`, **Go 1.25** at the scaffold (matching the
+  sibling library, so depending on `ipmap` never forced a consumer's toolchain bump), raised to **Go 1.27** at v0.2.1 · root package *is*
   the library · `app/ipmap/` for the CLI · `pkg/bits/` for sub-packages.
 - **No `LICENSE`, no `NOTICE`, no per-file headers.** House standard: a private repo is
   unlicensed — all rights reserved — and the licence is added at go-public, not before. Per-file

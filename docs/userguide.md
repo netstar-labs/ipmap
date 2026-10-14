@@ -1,6 +1,6 @@
 # ipmap — user guide
 
-> **v0.1.0.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
+> **v0.2.1.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
 > practice, not yet promised.
 
 ## Install
@@ -11,7 +11,7 @@ go build -o ipmap ./app/ipmap               # the CLI — `ipmap version` then s
 build/ipmap                                 # or the tracked script: stamps the git version
 ```
 
-Go 1.25 or newer. No dependencies outside the standard library.
+Go 1.27 or newer. No dependencies outside the standard library.
 
 ## The library
 

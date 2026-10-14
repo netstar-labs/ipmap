@@ -22,7 +22,7 @@ jobs:
       # Pinned, not @latest: these have broken on toolchain releases before,
       # and a gate that can start failing with no change in the repo is not a
       # gate. Bump them deliberately, with the Go version.
-      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       # deadcode exits 0 even when it finds something; only an empty report passes.
       - run: test -z "$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...)"
       - run: test -z "$(gofmt -l .)"
