@@ -8,7 +8,7 @@
 ```sh
 go get github.com/netstar-labs/ipmap        # the library
 go build -o ipmap ./app/ipmap               # the CLI — `ipmap version` then says "dev"
-build/ipmap                                 # the tracked script: a linux/amd64 package under build/install/
+build/ipmap                                 # or the tracked script: stamps the git version
 ```
 
 `build/ipmap` cross-compiles for linux/amd64 only and leaves a version-stamped binary and tarball
@@ -157,8 +157,8 @@ not fault, but it is no less forbidden. See `Close`, above.
 
 **Platforms.** `Open` memory-maps the artifact on unix, so an artifact may exceed RAM and the
 kernel pages it in as lookups touch it. Elsewhere — Windows — there is no mapping: `Open` reads
-the file into memory, so the artifact must fit, and `Close` releases nothing. The verification
-and the answers are identical.
+the file into memory, so the artifact must fit. Everything else behaves identically, the
+verification included.
 
 ### Errors from `Open`
 
