@@ -391,6 +391,58 @@ func TestCorruptionCorpus(t *testing.T) {
 	})
 }
 
+// Every section must start exactly where the previous one's padded end left
+// off — including the empty ones. The offset check in openBytes is the only
+// thing that says so, and for a zero-length section nothing else can: no bytes,
+// so no checksum or padding to object, and an offset anywhere in range slices
+// cleanly. Without it Open accepted an empty section parked at an arbitrary
+// offset, and two sections laid over the same bytes, neither of which
+// re-serialises to the input — the accepted-implies-canonical promise broken
+// by a file whose every checksum is correct.
+//
+// v6-only maps, so the whole 32-bit family is empty and its slots are free to
+// move; each mutation repairs the header CRC (and the moved section's own CRC,
+// which for the aliased case now covers the bytes it was pointed at) so that
+// only the offset rule can object.
+func TestOpenRefusesMisplacedSections(t *testing.T) {
+	// Three /64s of one entry each: n6 == np, so the suffix section is the same
+	// length as the prefix section and can be aliased onto it, with strictly
+	// ascending words that read as a valid suffix run.
+	v6 := []string{"2001:db8:0:1::1", "2001:db8:0:2::1", "2001:db8:0:3::1"}
+	for _, tc := range []struct {
+		name  string
+		slot  int
+		to    uint64 // the offset to write; ignored when alias is set
+		alias bool   // point the slot at the prefix section's offset instead
+	}{
+		{"empty section moved to offset 0", s4Idx, 0, false},
+		{"empty section moved into the header table", s4Suffix, 80, false},
+		{"empty section moved past its place, still in range", s4Vals, headerSize + 8, false},
+		{"empty interned-table slot moved to offset 0", sTab, 0, false},
+		{"suffix section overlaid on the prefix section", s6Suffix, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := smallArtifact(t, v6...)
+			to := tc.to
+			if tc.alias {
+				to, _ = section(b, s6Prefix)
+			} else if _, l := section(b, tc.slot); l != 0 {
+				t.Fatalf("slot %d is not empty in a v6-only map", tc.slot)
+			}
+			le().PutUint64(b[80+tc.slot*24:], to)
+			fixSectionCRC(b, tc.slot) // recomputes the moved section's CRC and the header's
+			m, err := openBytes(b)
+			if err == nil {
+				m.Close()
+				t.Fatal("accepted a misplaced section")
+			}
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("error %v, want %v", err, ErrCorrupt)
+			}
+		})
+	}
+}
+
 // smallArtifact serialises a ValLen-1 map of the given addresses. The crafted
 // cases below start from one of these rather than from the 400-entry random
 // artifacts: a handful of entries whose suffixes ascend *across* groups too,
@@ -589,14 +641,12 @@ func TestConcurrentCloseSameMap(t *testing.T) {
 	}
 }
 
-// Anything Open accepts must serve lookups without panicking and re-serialise
-// byte-identically: accepted implies canonical, so there is exactly one file
-// for any given content and nothing accepted is half-trusted.
-func FuzzOpen(f *testing.F) {
-	// Seeds must be small (the fuzz worker shares ~100 MB with its inputs) and
-	// any artifact with a 32-bit family carries the fixed 67 MB dense index —
-	// so the seeds here are the 128-bit-only and empty shapes, and the 32-bit
-	// reader path gets its adversarial coverage from TestOpenMutational below.
+// addOpenSeeds registers the corpus shared by both Open fuzzers. Seeds must be
+// small (the fuzz worker shares ~100 MB with its inputs) and any artifact with a
+// 32-bit family carries the fixed 67 MB dense index — so the seeds here are the
+// 128-bit-only and empty shapes, and the 32-bit reader path gets its adversarial
+// coverage from TestOpenMutational below.
+func addOpenSeeds(f *testing.F) {
 	seed6 := func(seed uint64, opt Options) []byte {
 		b := NewBuilder(opt)
 		r := rand.New(rand.NewPCG(seed, 3))
@@ -624,24 +674,65 @@ func FuzzOpen(f *testing.F) {
 	f.Add(seed6(52, Options{ValLen: 3, Intern: true}))
 	f.Add(ebuf.Bytes())
 	f.Add([]byte("IPMAPDB\x00 not really"))
+}
+
+// checkOpen is the contract both fuzzers hold Open to: no panic on any input,
+// and anything accepted serves lookups and re-serialises byte-identically.
+func checkOpen(t *testing.T, data []byte) {
+	if len(data) > 1<<20 {
+		return
+	}
+	m, err := openBytes(data)
+	if err != nil {
+		return
+	}
+	for _, s := range []string{"0.0.0.0", "1.2.3.4", "255.255.255.255", "::", "2001:db8::1", "::ffff:9.9.9.9"} {
+		m.Lookup(netip.MustParseAddr(s))
+	}
+	var out bytes.Buffer
+	if _, err := m.WriteTo(&out); err != nil {
+		t.Fatalf("accepted but cannot re-serialise: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), data) {
+		t.Fatalf("accepted a non-canonical artifact: %d in, %d out", len(data), out.Len())
+	}
+}
+
+// Anything Open accepts must serve lookups without panicking and re-serialise
+// byte-identically: accepted implies canonical, so there is exactly one file
+// for any given content and nothing accepted is half-trusted.
+func FuzzOpen(f *testing.F) {
+	addOpenSeeds(f)
+	f.Fuzz(checkOpen)
+}
+
+// FuzzOpenRepaired is FuzzOpen for the code behind the checksums. A fuzzer
+// mutating raw bytes dies at the header CRC on essentially every input (28M
+// executions of FuzzOpen found nothing new), so validate and the group checks
+// were never reached. Here every checksum is recomputed from the fuzzed bytes
+// before Open sees them, wherever the geometry allows, so the mutation lands on
+// the structural rules instead: counts, offsets, group bounds, suffix order,
+// ids. A section whose table entry points outside the file cannot be
+// checksummed and is left as fuzzed — Open should refuse it on geometry.
+func FuzzOpenRepaired(f *testing.F) {
+	addOpenSeeds(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<20 {
 			return
 		}
-		m, err := openBytes(data)
-		if err != nil {
-			return
+		data = bytes.Clone(data) // the repair below writes; never into the engine's buffer
+		if len(data) >= headerSize {
+			n := uint64(len(data))
+			for slot := 0; slot < numSections; slot++ {
+				at := 80 + slot*24
+				off, l := le().Uint64(data[at:]), le().Uint64(data[at+8:])
+				if off <= n && l <= n-off { // no overflow, in range
+					le().PutUint32(data[at+16:], crc32.ChecksumIEEE(data[off:off+l]))
+				}
+			}
+			fixHeaderCRC(data)
 		}
-		for _, s := range []string{"0.0.0.0", "1.2.3.4", "255.255.255.255", "::", "2001:db8::1", "::ffff:9.9.9.9"} {
-			m.Lookup(netip.MustParseAddr(s))
-		}
-		var out bytes.Buffer
-		if _, err := m.WriteTo(&out); err != nil {
-			t.Fatalf("accepted but cannot re-serialise: %v", err)
-		}
-		if !bytes.Equal(out.Bytes(), data) {
-			t.Fatalf("accepted a non-canonical artifact: %d in, %d out", len(data), out.Len())
-		}
+		checkOpen(t, data)
 	})
 }
 
