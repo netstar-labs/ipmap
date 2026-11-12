@@ -190,13 +190,18 @@ func Open(path string) (*Map, error) {
 // to release and Close is a no-op. Close is idempotent, including concurrently
 // — but it does not synchronise with lookups: a lookup racing a Close is a
 // use-after-free by the rule above, and no locking here could absolve it.
+//
+// The call that actually releases the mapping returns the error from doing so
+// (a failed munmap); every later call, concurrent or not, has nothing left to
+// release and returns nil.
 func (m *Map) Close() error {
+	var err error
 	m.closeOnce.Do(func() {
 		if m.close != nil {
-			m.close()
+			err = m.close()
 		}
 	})
-	return nil
+	return err
 }
 
 // openBytes validates data as an artifact and builds a Map viewing it.
