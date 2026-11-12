@@ -387,8 +387,8 @@ func (m *Map) validate() error {
 }
 
 // checkGroups validates one family's group geometry: offsets start at zero and
-// end exactly at n, groups never run backwards or fall below minGroup entries,
-// and suffixes ascend strictly within each group. One function for both
+// end exactly at n, groups never run backwards, past n, or below minGroup
+// entries, and suffixes ascend strictly within each group. One function for both
 // families, so every corruption-corpus case that exercises one family's
 // checking is also proof the other family checks the same way.
 func checkGroups[S uint8 | uint64](idx []uint32, suffix []S, n, minGroup int, family string) error {
@@ -398,7 +398,10 @@ func checkGroups[S uint8 | uint64](idx []uint32, suffix []S, n, minGroup int, fa
 	}
 	for i := 1; i < len(idx); i++ {
 		lo, hi := idx[i-1], idx[i]
-		if hi < lo || int(hi-lo) < minGroup {
+		// hi must be bounded by n before the scan below reads suffix[:hi]: the
+		// final-offset check above proves only the last entry, so a middle one
+		// can be anything. Compared as uint64 so no conversion can truncate it.
+		if hi < lo || uint64(hi) > uint64(n) || int(hi-lo) < minGroup {
 			return bad("group bounds")
 		}
 		for j := lo + 1; j < hi; j++ { // strictly ascending within a group

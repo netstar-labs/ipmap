@@ -391,6 +391,74 @@ func TestCorruptionCorpus(t *testing.T) {
 	})
 }
 
+// smallArtifact serialises a ValLen-1 map of the given addresses. The crafted
+// cases below start from one of these rather than from the 400-entry random
+// artifacts: a handful of entries whose suffixes ascend *across* groups too,
+// so a mutation can only be refused by the one rule it targets, not by an
+// order check that happens to trip first on the way.
+func smallArtifact(t testing.TB, addrs ...string) []byte {
+	t.Helper()
+	b := NewBuilder(Options{ValLen: 1})
+	for _, s := range addrs {
+		if err := b.Add(netip.MustParseAddr(s), []byte{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// A group's end offset must be bounded by the entry count *before* the group is
+// scanned. checkGroups once rejected only a group that ran backwards, then
+// walked suffix[lo+1:hi] — so a middle offset far past n, with the final offset
+// still honestly n, read off the end of the section and panicked inside Open
+// instead of returning ErrCorrupt. The closing "index ends at n" check cannot
+// help: it proves the last offset, not the ones before it.
+//
+// Both families, crafted rather than mutated from the random artifacts: there a
+// group boundary usually lets the order check fire first and mask the bug.
+func TestOpenGroupEndBeyondEntries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		addrs []string
+		slot  int // the offset array to corrupt
+		at    int // which offset in it
+	}{
+		// idx[1]: the end of /24 group 0, between the honest start and tail.
+		{"32-bit", []string{"1.2.3.4", "1.2.3.5", "1.2.3.6"}, s4Idx, 1},
+		// pidx[1]: two prefixes, so pidx = [0, 2, 3] and the middle entry is free.
+		{"128-bit", []string{"2001:db8::1", "2001:db8::2", "2001:db9::3"}, s6Pidx, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := smallArtifact(t, tc.addrs...)
+			off, _ := section(b, tc.slot)
+			le().PutUint32(b[off+uint64(tc.at)*4:], 1<<30)
+			fixSectionCRC(b, tc.slot)
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("openBytes panicked on a group ending far past n: %v", r)
+				}
+			}()
+			m, err := openBytes(b)
+			if err == nil {
+				m.Close()
+				t.Fatal("accepted a group that ends past the entry count")
+			}
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("error %v, want %v", err, ErrCorrupt)
+			}
+		})
+	}
+}
+
 // Close is documented idempotent, concurrent calls included: racing Closes on
 // one Map must neither double-release nor call through a half-cleared field.
 // The teeth are the -race pass — a bare nil-check here was a demonstrated
