@@ -1,6 +1,6 @@
 # ipmap — user guide
 
-> **v0.2.1.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
+> **v0.2.0.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
 > practice, not yet promised.
 
 ## Install
@@ -8,8 +8,11 @@
 ```sh
 go get github.com/netstar-labs/ipmap        # the library
 go build -o ipmap ./app/ipmap               # the CLI — `ipmap version` then says "dev"
-build/ipmap                                 # or the tracked script: stamps the git version
+build/ipmap                                 # the tracked script: a linux/amd64 package under build/install/
 ```
+
+`build/ipmap` cross-compiles for linux/amd64 only and leaves a version-stamped binary and tarball
+under `build/install/`; for a binary that runs on this machine, use the `go build` line above.
 
 Go 1.27 or newer. No dependencies outside the standard library.
 
@@ -120,12 +123,13 @@ to alert on, since an artifact that stops being rebuilt looks entirely healthy o
 `Close` **unmaps**. On a `Map` from `Build` there is nothing to release and it is a no-op, but on
 one from `Open` it revokes the memory every value and every future lookup points into — so a
 `Lookup` after `Close`, or one still running in another goroutine when `Close` lands, is a
-use-after-free that ends the process with `SIGSEGV`. It is not a panic and `recover` will not
-save you. `Close` is idempotent and safe to call concurrently *with itself*; it is not
-synchronised with lookups, and no locking inside the library could make it so. `defer m.Close()`
-is right when the `Map` does not outlive the function; when it does — a handler goroutine, a
-cached pointer — close only once every reader is provably finished, as
-[example/lookup](../example/lookup/main.go) shows.
+use-after-free that, on unix, ends the process with `SIGSEGV`. It is not a panic and `recover`
+will not save you. (Off unix `Open` reads the file into memory and `Close` releases nothing, so
+the same mistake does not fault — it is still forbidden.) `Close` is idempotent and safe to call
+concurrently *with itself*; it is not synchronised with lookups, and no locking inside the
+library could make it so. `defer m.Close()` is right when the `Map` does not outlive the
+function; when it does — a handler goroutine, a cached pointer — close only once every reader is
+provably finished, as [example/lookup](../example/lookup/main.go) shows.
 
 An artifact is immutable once opened, so any number of goroutines may query one `Map`
 concurrently without synchronisation. To update, build a new artifact and swap the pointer —
@@ -147,13 +151,14 @@ on their own account: a miss is a miss, a short `LookupInto` buffer is a miss, a
 zoned address is a miss.
 
 The one fatal case is lifetime, not input: **using an `Open`ed `Map`, or a value it returned,
-after `Close`** — that is a use-after-free against an unmapped region, and it ends the process
-with `SIGSEGV` rather than a recoverable panic. See `Close`, above.
+after `Close`** — on unix that is a use-after-free against an unmapped region, and it ends the
+process with `SIGSEGV` rather than a recoverable panic; off unix nothing is unmapped, so it does
+not fault, but it is no less forbidden. See `Close`, above.
 
 **Platforms.** `Open` memory-maps the artifact on unix, so an artifact may exceed RAM and the
 kernel pages it in as lookups touch it. Elsewhere — Windows — there is no mapping: `Open` reads
-the file into memory, so the artifact must fit. Everything else behaves identically, the
-verification included.
+the file into memory, so the artifact must fit, and `Close` releases nothing. The verification
+and the answers are identical.
 
 ### Errors from `Open`
 
@@ -161,9 +166,9 @@ Distinguished because the operator response differs:
 
 | Error | Means | Do |
 |---|---|---|
-| `ErrFormat` | not an ipmap artifact | check the path — this is usually configuration |
+| `ErrFormat` | not an ipmap artifact — wrong magic, or an empty or shorter-than-header file | check the path — this is usually configuration |
 | `ErrVersion` | a format version this reader does not implement, or a flag bit it does not know | update the reader; it refuses rather than guesses |
-| `ErrCorrupt` | failed verification — truncated, damaged, or header/body disagree | rebuild; do not serve from it |
+| `ErrCorrupt` | failed verification — truncated past the header, damaged, or header/body disagree | rebuild; do not serve from it |
 
 **The reader refuses rather than guesses.** An artifact it cannot fully verify is not partially
 served: answering from a format or a byte range it does not understand is worse than not
@@ -201,10 +206,10 @@ be given in any order, since the build sorts regardless. `::ffff:1.2.3.4` is sto
 32-bit address `1.2.3.4`, so it counts under `addrs4` in `stats`; a zoned address such as
 `fe80::1%eth0` is refused with its line number.
 
-**Duplicate addresses are resolved last-wins and counted.** `build`, `verify` and `stats` all
-report the count, because a duplicate that carries a *different* value means the input disagrees
-with itself — which is worth knowing about, and is silently destructive in any structure that
-cannot represent a key twice. A conflict is counted against the entry that survived, not against
+**Duplicate addresses are resolved last-wins and counted.** `verify` and `stats` always
+report the count, and `build` does when there are duplicates, because a duplicate that carries a
+*different* value means the input disagrees with itself — which is worth knowing about, and is
+silently destructive in any structure that cannot represent a key twice. A conflict is counted against the entry that survived, not against
 its neighbour in the run.
 
 ## The artifact

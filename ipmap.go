@@ -31,19 +31,24 @@ import (
 
 // Errors reported when opening an artifact. They are distinguished because the
 // operator response differs: a wrong file is a configuration mistake, an
-// unsupported version needs a newer reader, and a failed checksum means the
-// bytes are damaged.
+// unsupported version needs a newer reader, and a failed verification means
+// the bytes are damaged.
 var (
-	// ErrFormat reports a file that is not an ipmap artifact.
+	// ErrFormat reports a file that is not an ipmap artifact: the magic is
+	// wrong, or the file is shorter than the 280-byte header, an empty file
+	// included.
 	ErrFormat = errors.New("ipmap: not an ipmap artifact")
 
-	// ErrVersion reports an artifact written by a newer format version. A
-	// reader refuses rather than guesses: answering from a format it does not
-	// understand is worse than not answering.
+	// ErrVersion reports an artifact in a format this reader does not
+	// implement: any version other than the one it knows (a newer one, but
+	// also 0), or a header flag bit it does not recognise. A reader refuses
+	// rather than guesses: answering from a format it does not understand is
+	// worse than not answering.
 	ErrVersion = errors.New("ipmap: unsupported format version")
 
-	// ErrCorrupt reports an artifact that failed verification — a truncated
-	// file, a damaged section, or a header inconsistent with the body.
+	// ErrCorrupt reports an artifact that has the magic and a full header but
+	// failed verification — a file truncated past the header, a damaged
+	// section, or a header inconsistent with the body.
 	ErrCorrupt = errors.New("ipmap: artifact failed verification")
 )
 

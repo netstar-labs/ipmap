@@ -164,13 +164,17 @@ func (m *Map) tabBytes() []byte {
 
 // Open memory-maps an artifact and verifies all of it — header, every section
 // checksum, and every structural invariant a lookup depends on — before
-// returning. The cost is one sequential pass over the file, paid once at open
-// rather than as wrong answers later. The returned Map's values alias the
-// mapping and are valid until Close.
+// returning. The cost is a checksum pass over every section, then a second
+// read of the index, suffix, prefix and id sections for the structural
+// checks, paid once at open rather than as wrong answers later. An artifact
+// larger than RAM is therefore read in full at open, even though lookups will
+// afterwards touch only the pages they need. The returned Map's values alias
+// the mapping and are valid until Close.
 //
 // The mapping is a real mmap on unix, where an artifact may exceed RAM and is
 // paged in on demand; on other platforms the file is read into memory instead,
-// so it must fit. Nothing else differs.
+// so it must fit. Close is the other difference: off unix it releases nothing,
+// so a use after Close does not fault there — it is still forbidden.
 func Open(path string) (*Map, error) {
 	data, closer, err := mapFile(path)
 	if err != nil {

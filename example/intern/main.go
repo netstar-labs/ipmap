@@ -21,8 +21,9 @@ func main() {
 	// repetition real feeds have, at a size that builds in milliseconds. The
 	// 128-bit family is used here because its artifact is all payload; a
 	// 32-bit artifact carries a fixed 67 MB index that would drown the ratio
-	// at toy scale (at real scale it is 4.6 bytes per address — see the
-	// sizing note in docs/userguide.md).
+	// at toy scale (at 10^8 addresses with 3-byte ids it is about 4.7 bytes
+	// per address: 0.67 of index, 1 of suffix, 3 of id — see the Sizing note
+	// under "Operational notes" in docs/userguide.md).
 	addr := func(i int) netip.Addr {
 		return netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 8: byte(i >> 16), byte(i >> 8), byte(i), 15: 0x01})
 	}

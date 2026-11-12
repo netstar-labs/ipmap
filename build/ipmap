@@ -2,7 +2,7 @@
 # build/ipmap — cross-compile the ipmap CLI (linux/amd64, version stamped) and
 # leave a self-contained package under build/install/.
 #
-#   build/ipmap [--cli]
+#   build/ipmap
 #
 # The build output is not tracked; only this script is.
 set -eu
