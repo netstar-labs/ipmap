@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -301,6 +302,33 @@ func TestVersionCommand(t *testing.T) {
 	}
 	if version == "" {
 		t.Fatal("version is empty: an unstamped build must still say something")
+	}
+}
+
+// failWriter stands in for a stdout that cannot be written: a closed pipe, a
+// full disk, a revoked descriptor.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+// A command whose output never arrived must not report success: a script
+// checking only the exit code would otherwise proceed on an empty result.
+// stats -json is in the list so the one path that already behaved keeps doing so.
+func TestStdoutWriteErrorsExitNonZero(t *testing.T) {
+	db := buildArtifact(t)
+	for _, args := range [][]string{
+		{"lookup", "-db", db, "1.2.3.4"},
+		{"lookup", "-db", db, "-json", "1.2.3.4"},
+		{"stats", "-db", db},
+		{"stats", "-db", db, "-json"},
+		{"verify", "-db", db},
+		{"version"},
+	} {
+		var errb bytes.Buffer
+		code := run(args, strings.NewReader(""), failWriter{}, &errb)
+		if code != 1 || !strings.Contains(errb.String(), "write failed") {
+			t.Errorf("%v: exit %d, stderr %q; want exit 1 naming the write error", args, code, errb.String())
+		}
 	}
 }
 

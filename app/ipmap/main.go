@@ -53,7 +53,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "stats":
 		err = stats(args[1:], stdout)
 	case "version", "-version", "--version":
-		fmt.Fprintln(stdout, version)
+		_, err = fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
 		usage(stderr)
 		return 2
@@ -201,7 +201,7 @@ func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
 	return b, nil
 }
 
-func lookup(args []string, stdin io.Reader, stdout io.Writer) error {
+func lookup(args []string, stdin io.Reader, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
 	db := fs.String("db", "", "artifact to query")
 	asJSON := fs.Bool("json", false, "one JSON object per line")
@@ -218,7 +218,14 @@ func lookup(args []string, stdin io.Reader, stdout io.Writer) error {
 	defer m.Close()
 
 	w := bufio.NewWriter(stdout)
-	defer w.Flush()
+	// A short result sits entirely in the buffer, so a dead stdout surfaces
+	// only here. It must not be swallowed, but it must not mask the error that
+	// ended the loop either.
+	defer func() {
+		if ferr := w.Flush(); err == nil {
+			err = ferr
+		}
+	}()
 	enc := json.NewEncoder(w)
 
 	one := func(raw string) error {
@@ -285,12 +292,12 @@ func verify(args []string, stdout io.Writer) error {
 	// The duplicate counts ride along unconditionally: a script comparing two
 	// verify receipts should see the same fields either way, and a duplicate
 	// carrying a different value means the input disagreed with itself.
-	fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d, %d duplicates dropped (%d conflicting)\n",
+	_, err = fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d, %d duplicates dropped (%d conflicting)\n",
 		st.Addrs4, st.Addrs6, m.ValLen(), st.Dups, st.DupConflicts)
-	return nil
+	return err
 }
 
-func stats(args []string, stdout io.Writer) error {
+func stats(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
 	db := fs.String("db", "", "artifact to describe")
 	asJSON := fs.Bool("json", false, "a single JSON object")
@@ -320,7 +327,13 @@ func stats(args []string, stdout io.Writer) error {
 		}{st.Addrs4, st.Addrs6, m.ValLen(), st.Distinct > 0, st.Distinct, st.Dups, st.DupConflicts, m.Epoch()})
 	}
 	w := bufio.NewWriter(stdout)
-	defer w.Flush()
+	// Buffered, so the Fprintf errors below are sticky in w and Flush reports
+	// the first of them; returning Flush's error is therefore enough.
+	defer func() {
+		if ferr := w.Flush(); err == nil {
+			err = ferr
+		}
+	}()
 	fmt.Fprintf(w, "addresses     %d v4, %d v6\n", st.Addrs4, st.Addrs6)
 	fmt.Fprintf(w, "value width   %d bytes\n", m.ValLen())
 	if st.Distinct > 0 {
