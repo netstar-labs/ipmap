@@ -725,3 +725,83 @@ func TestZeroEpochStampsNow(t *testing.T) {
 		t.Fatalf("Epoch = %d, want a stamp between %d and now", got, before)
 	}
 }
+
+// The big-endian fallback — u32bytes, u64bytes, u32view and u64view copy
+// through encoding/binary instead of reinterpreting memory — is dead code on
+// every host the tests run on, so it is forced here by clearing nativeLE. The
+// artifact must come out byte-identical to the native path's, and an artifact
+// opened through the copying views must answer and re-serialise identically.
+// The variable is a package global; no test in this package runs in parallel
+// (none calls t.Parallel), and this one restores it before returning, so no
+// other test can observe it cleared.
+func TestBigEndianFallback(t *testing.T) {
+	type shape struct {
+		name string
+		m    *Map
+		o    oracle
+	}
+	small := func(name string, adds ...string) shape {
+		b := NewBuilder(Options{ValLen: 2})
+		o := oracle{}
+		for i, s := range adds {
+			a := netip.MustParseAddr(s)
+			v := []byte{byte(i + 1), byte(i + 100)}
+			if err := b.Add(a, v); err != nil {
+				t.Fatal(err)
+			}
+			o.add(a, v)
+		}
+		m, err := b.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return shape{name, m, o}
+	}
+	direct, dOracle := buildRandomOpt(t, 91, 400, Options{ValLen: testValLen})
+	interned, iOracle := buildRandomOpt(t, 92, 400, Options{ValLen: testValLen, Intern: true})
+	shapes := []shape{
+		{"direct", direct, dOracle},
+		{"interned", interned, iOracle},
+		small("empty"),
+		small("v4-only", "1.2.3.4", "1.2.3.5", "200.1.2.3"),
+		small("v6-only", "2001:db8::1", "2001:db8::2", "fe80::1"),
+	}
+
+	serialise := func(t *testing.T, m *Map) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		if _, err := m.WriteTo(&buf); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	for _, sh := range shapes {
+		t.Run(sh.name, func(t *testing.T) {
+			native := serialise(t, sh.m)
+
+			saved := nativeLE
+			nativeLE = false
+			defer func() { nativeLE = saved }()
+
+			if got := serialise(t, sh.m); !bytes.Equal(got, native) {
+				t.Fatal("WriteTo with the fallback differs from the native WriteTo")
+			}
+			opened, err := openBytes(native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for k, want := range sh.o {
+				if got, ok := opened.Lookup(k); !ok || !bytes.Equal(got, want) {
+					t.Fatalf("fallback-opened map disagrees at %v", k)
+				}
+			}
+			if opened.Stats() != sh.m.Stats() {
+				t.Fatalf("stats changed through the fallback: %+v vs %+v", opened.Stats(), sh.m.Stats())
+			}
+			if again := serialise(t, opened); !bytes.Equal(again, native) {
+				t.Fatal("fallback open → re-write is not byte-identical")
+			}
+		})
+	}
+}
