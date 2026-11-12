@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/netstar-labs/ipmap"
@@ -61,8 +62,94 @@ func TestBuildReceipt(t *testing.T) {
 	if errs != want {
 		t.Fatalf("receipt:\n got %q\nwant %q", errs, want)
 	}
-	if _, err := os.Stat(db + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal("the temp file survived a successful build")
+	if tmps, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmps) != 0 {
+		t.Fatalf("temp files survived a successful build: %v", tmps)
+	}
+}
+
+// The temp file's name used to be the fixed <out>.tmp, which a pre-planted
+// symlink could redirect: os.Create followed it and the build overwrote
+// whatever it pointed at. A unique name opened with O_EXCL cannot be steered
+// that way, and the planted link must come through untouched.
+func TestBuildDoesNotFollowPlantedTempSymlink(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "in.spec")
+	if err := os.WriteFile(sp, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "victim")
+	const precious = "do not overwrite"
+	if err := os.WriteFile(victim, []byte(precious), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "out.ipmap")
+	if err := os.Symlink(victim, db+".tmp"); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if code, _, errs := exec(t, "", "build", "-in", sp, "-out", db); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != precious {
+		t.Fatalf("the symlink target was written through: %q, %v", got, err)
+	}
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("the artifact is not valid: exit %d: %s", code, errs)
+	}
+}
+
+// The artifact's mode is whatever umask leaves of 0666, as os.Create gives.
+// os.CreateTemp would make it 0600 and silently lock out readers running as
+// another user, so the temp file is opened by hand; this pins that choice.
+func TestBuildOutputModeMatchesCreate(t *testing.T) {
+	db := buildArtifact(t)
+	dir := filepath.Dir(db)
+	ref := filepath.Join(dir, "ref")
+	f, err := os.Create(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	want, err := os.Stat(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Stat(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode() != want.Mode() {
+		t.Fatalf("artifact mode %v, os.Create gives %v", got.Mode(), want.Mode())
+	}
+}
+
+// Builds racing to one -out used to share a single temp file: interleaved
+// writes produced corrupt bytes under the final name, and one build's rename
+// stole another's, failing it. With a temp file per build every one succeeds
+// and what lands is a whole artifact.
+func TestConcurrentBuildsToOneOutput(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "in.spec")
+	if err := os.WriteFile(sp, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "out.ipmap")
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var out, errb bytes.Buffer
+			if code := run([]string{"build", "-in", sp, "-out", db}, strings.NewReader(""), &out, &errb); code != 0 {
+				t.Errorf("concurrent build exited %d: %s", code, errb.String())
+			}
+		}()
+	}
+	wg.Wait()
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("the artifact is not valid: exit %d: %s", code, errs)
+	}
+	if tmps, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmps) != 0 {
+		t.Fatalf("temp files left behind: %v", tmps)
 	}
 }
 

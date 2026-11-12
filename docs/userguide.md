@@ -180,9 +180,10 @@ ipmap version                                       what build this is
 ```
 
 Human-readable by default; `lookup` and `stats` take `-json` for pipelines. `verify` exits
-non-zero on any violation, so it is usable as a build gate. `build` writes `<out>.tmp` beside its
-output and renames it into place, so a crash cannot leave a half-artifact under the final name —
-worth knowing if `-out` points into a watched directory.
+non-zero on any violation, so it is usable as a build gate. `build` writes `<out>.<random>.tmp`
+beside its output and renames it into place, so a process crash cannot leave a half-artifact under
+the final name — worth knowing if `-out` points into a watched directory. The name is unique to
+each build, so concurrent builds to one `-out` do not share a file; the last rename wins.
 
 ## The spec format
 

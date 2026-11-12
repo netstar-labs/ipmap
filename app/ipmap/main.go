@@ -19,8 +19,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,25 +124,27 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 		return err
 	}
 
-	// Write to a sibling temp path and rename, so a crash mid-write cannot
-	// leave a half-artifact under the final name — Open would refuse it, but a
-	// name that exists implies a file that serves.
-	tmp := *out + ".tmp"
-	of, err := os.Create(tmp)
+	// Write to a sibling temp path and rename, so a process crash mid-write
+	// cannot leave a half-artifact under the final name — Open would refuse
+	// it, but a name that exists implies a file that serves. The temp name is
+	// unique to this build: concurrent builds to one -out must not share (and
+	// interleave writes into) one file. The deferred Remove covers every error
+	// return, and after a successful rename it finds nothing and is a no-op.
+	// There is deliberately no fsync: the promise is crash safety for the
+	// process, not durability across power loss.
+	tmp, of, err := createTemp(*out)
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tmp)
 	if _, err := m.WriteTo(of); err != nil {
 		of.Close()
-		os.Remove(tmp)
 		return err
 	}
 	if err := of.Close(); err != nil {
-		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, *out); err != nil {
-		os.Remove(tmp)
 		return err
 	}
 	st := m.Stats()
@@ -153,6 +157,29 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stderr)
 	return nil
+}
+
+// createTemp creates a new file named <out>.<random>.tmp beside out and
+// returns it open for writing. O_EXCL makes the create fail rather than reuse
+// or follow anything already at that name — a symlink planted in a shared
+// directory included — so each build owns its temp file outright; a collision
+// is retried under a fresh suffix. os.CreateTemp is not used because it makes
+// the file 0600, which would silently narrow the artifact's mode from the
+// umask default and lock out readers running as another user. The .tmp suffix
+// is kept because the user guide names it for anything watching the directory.
+func createTemp(out string) (string, *os.File, error) {
+	var err error
+	for range 10 {
+		name := out + "." + strconv.FormatUint(rand.Uint64(), 36) + ".tmp"
+		var f *os.File
+		if f, err = os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666); err == nil {
+			return name, f, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
+	}
+	return "", nil, err
 }
 
 // parseSpec reads the text spec from r into a Builder: one "<address>
