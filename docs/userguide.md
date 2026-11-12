@@ -186,6 +186,18 @@ beside its output and renames it into place, so a process crash cannot leave a h
 the final name — worth knowing if `-out` points into a watched directory. The name is unique to
 each build, so concurrent builds to one `-out` do not share a file; the last rename wins.
 
+**`lookup` stops at the first bad input.** It answers the addresses on the command line, or the
+lines on stdin (blank lines skipped), in order, and at the first one that does not parse as an
+address it stops: the results already produced are printed, the remaining arguments or lines are
+not looked up, and it exits 1 with the offending text on stderr. A pipeline that must answer
+every line should validate its input first. This differs from the library, whose `Lookup` reports
+an invalid address as a miss rather than an error. A well-formed address that is simply absent is
+a miss on the CLI too: it prints `miss` (or `"found":false` with `-json`) and exits 0.
+
+**Exit codes.** `0` — success. `1` — an error: bad input or spec, a missing or unknown flag, an
+unreadable or invalid artifact, a failed write to stdout. `2` — usage or help: no command, an
+unknown command, or `-h` on the program or any subcommand.
+
 ## The spec format
 
 `build` reads a whitespace-separated text spec — one entry per line, `#` comments and blank lines
