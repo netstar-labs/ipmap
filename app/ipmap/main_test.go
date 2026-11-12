@@ -332,6 +332,24 @@ func TestStdoutWriteErrorsExitNonZero(t *testing.T) {
 	}
 }
 
+// The flag package writes its own diagnostics and usage to the FlagSet's
+// output, which defaults to os.Stderr — not the stderr run was handed. The
+// "ipmap:" line run prints for the returned error also carries the message, so
+// the usage banner is the part that proves where the FlagSet wrote.
+func TestFlagErrorsUseInjectedStderr(t *testing.T) {
+	for _, cmd := range []string{"build", "lookup", "verify", "stats"} {
+		code, out, errs := exec(t, "", cmd, "-bogus")
+		if code != 1 || out != "" {
+			t.Errorf("%s -bogus: exit %d, stdout %q; want exit 1 and no stdout", cmd, code, out)
+		}
+		for _, want := range []string{"flag provided but not defined", "Usage of " + cmd + ":"} {
+			if !strings.Contains(errs, want) {
+				t.Errorf("%s -bogus: injected stderr %q lacks %q", cmd, errs, want)
+			}
+		}
+	}
+}
+
 func TestUsageAndUnknown(t *testing.T) {
 	if code, _, errs := exec(t, ""); code != 2 || !strings.Contains(errs, "usage:") {
 		t.Fatalf("no-args: exit %d, %q", code, errs)

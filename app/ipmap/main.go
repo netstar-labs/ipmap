@@ -47,11 +47,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "build":
 		err = build(args[1:], stdin, stderr)
 	case "lookup":
-		err = lookup(args[1:], stdin, stdout)
+		err = lookup(args[1:], stdin, stdout, stderr)
 	case "verify":
-		err = verify(args[1:], stdout)
+		err = verify(args[1:], stdout, stderr)
 	case "stats":
-		err = stats(args[1:], stdout)
+		err = stats(args[1:], stdout, stderr)
 	case "version", "-version", "--version":
 		_, err = fmt.Fprintln(stdout, version)
 	case "help", "-h", "--help":
@@ -201,8 +201,9 @@ func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
 	return b, nil
 }
 
-func lookup(args []string, stdin io.Reader, stdout io.Writer) (err error) {
+func lookup(args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
+	fs.SetOutput(stderr) // the flag package defaults to os.Stderr, bypassing run's
 	db := fs.String("db", "", "artifact to query")
 	asJSON := fs.Bool("json", false, "one JSON object per line")
 	if err := fs.Parse(args); err != nil {
@@ -274,8 +275,9 @@ func lookup(args []string, stdin io.Reader, stdout io.Writer) (err error) {
 // invariant before returning, so an artifact that opens is an artifact that
 // passed. The command exists to give scripts an exit code and a one-line
 // receipt.
-func verify(args []string, stdout io.Writer) error {
+func verify(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	db := fs.String("db", "", "artifact to verify")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -297,8 +299,9 @@ func verify(args []string, stdout io.Writer) error {
 	return err
 }
 
-func stats(args []string, stdout io.Writer) (err error) {
+func stats(args []string, stdout, stderr io.Writer) (err error) {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	db := fs.String("db", "", "artifact to describe")
 	asJSON := fs.Bool("json", false, "a single JSON object")
 	if err := fs.Parse(args); err != nil {
