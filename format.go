@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"slices"
 	"time"
 	"unsafe"
 )
@@ -336,6 +337,13 @@ func openBytes(data []byte) (*Map, error) {
 	return m, nil
 }
 
+// The low words of the 4-in-6 range ::ffff:0:0 – ::ffff:ffff:ffff, whose high
+// word is zero. validate refuses any 128-bit key inside it.
+const (
+	mappedLo uint64 = 0x0000ffff00000000
+	mappedHi uint64 = 0x0000ffffffffffff
+)
+
 // validate checks every structural invariant the lookup path relies on, so a
 // well-checksummed file from a buggy or hostile writer still cannot produce an
 // out-of-bounds access or a wrong answer.
@@ -359,6 +367,22 @@ func (m *Map) validate() error {
 		// would be a prefix the writer had no reason to list.
 		if err := checkGroups(s.pidx, s.suffix, n, 1, "128-bit"); err != nil {
 			return err
+		}
+		// No key in the 4-in-6 range ::ffff:0:0/96 may live in the 128-bit
+		// store. Add unmaps such a key into the 32-bit family and Lookup unmaps
+		// before it searches, so no Builder writes one and no Lookup reaches
+		// one: an artifact holding it carries an entry the API can never return,
+		// which can also contradict the 32-bit store's value for the same host
+		// while every checksum still passes. The range is hi == 0 and
+		// lo>>32 == 0xffff, one contiguous run inside prefix 0's group — and
+		// the group's order is proven only now, by checkGroups, so the binary
+		// search must come after it.
+		if s.prefix[0] == 0 {
+			seg := s.suffix[s.pidx[0]:s.pidx[1]]
+			i, _ := slices.BinarySearch(seg, mappedLo)
+			if i < len(seg) && seg[i] <= mappedHi {
+				return bad("128-bit key in the 4-in-6 range")
+			}
 		}
 	}
 	if m.interned() {

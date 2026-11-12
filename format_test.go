@@ -459,6 +459,110 @@ func TestOpenGroupEndBeyondEntries(t *testing.T) {
 	}
 }
 
+// craft6 serialises a 128-bit-only artifact holding exactly the keys hi:lows[i],
+// one prefix group, by building an ordinary map of the right shape and then
+// overwriting its prefix and suffix words with the wanted ones, checksums
+// repaired. It exists because the keys under test are ones no Builder will
+// write: that is the point of them. lows must ascend.
+func craft6(t testing.TB, hi uint64, lows ...uint64) []byte {
+	t.Helper()
+	addrs := make([]string, len(lows))
+	for i := range lows {
+		addrs[i] = addr6{hi: 0x20010db800000000, lo: uint64(i + 1)}.addr().String()
+	}
+	b := smallArtifact(t, addrs...)
+	poff, _ := section(b, s6Prefix)
+	le().PutUint64(b[poff:], hi)
+	fixSectionCRC(b, s6Prefix)
+	soff, _ := section(b, s6Suffix)
+	for i, lo := range lows {
+		le().PutUint64(b[soff+uint64(i)*8:], lo)
+	}
+	fixSectionCRC(b, s6Suffix)
+	return b
+}
+
+// A key in ::ffff:0:0/96 can sit in the 128-bit store of a file Open would
+// otherwise accept, though nothing legitimate writes it: Add unmaps such a
+// key into the 32-bit family and Lookup unmaps before searching, so the entry
+// is unreachable by construction — and can disagree with the 32-bit store's
+// value for the same host while every checksum passes. Open refuses it. The
+// range's neighbours on both sides, and the same low words under a non-zero
+// high word, stay legal, so the refusal is exactly the range and no wider.
+func TestOpenRefusesMappedRangeKeys(t *testing.T) {
+	const lo, mid, top = 0x0000ffff00000000, 0x0000ffff0a000001, 0x0000ffffffffffff
+	const below, above = 0x0000fffeffffffff, 0x0001000000000000
+	for _, tc := range []struct {
+		name   string
+		hi     uint64
+		lows   []uint64
+		refuse bool
+	}{
+		{"first of the range", 0, []uint64{lo}, true},
+		{"::ffff:10.0.0.1", 0, []uint64{mid}, true},
+		{"last of the range", 0, []uint64{top}, true},
+		{"mid-group, between legal neighbours", 0, []uint64{1, mid, 1 << 63}, true},
+		{"last of a group, range at its tail", 0, []uint64{1, below, top}, true},
+		{"just below", 0, []uint64{below}, false},
+		{"just above", 0, []uint64{above}, false},
+		{"both neighbours, range empty between", 0, []uint64{0, below, above, 1 << 63}, false},
+		{"range low words under a non-zero high word", 1, []uint64{lo, mid, top}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := craft6(t, tc.hi, tc.lows...)
+			m, err := openBytes(b)
+			if tc.refuse {
+				if err == nil {
+					t.Fatal("accepted a 128-bit key in the 4-in-6 range")
+				}
+				if !errors.Is(err, ErrCorrupt) {
+					t.Fatalf("error %v, want %v", err, ErrCorrupt)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("refused a legal key: %v", err)
+			}
+			var out bytes.Buffer
+			if _, err := m.WriteTo(&out); err != nil || !bytes.Equal(out.Bytes(), b) {
+				t.Fatal("accepted artifact does not re-serialise to itself")
+			}
+		})
+	}
+}
+
+// The other direction: every spelling a caller can give still works. A Builder
+// handed the mapped spelling stores it in the 32-bit family, so a mapped host
+// round-trips through the file and answers under both spellings.
+func TestMappedSpellingsRoundTrip(t *testing.T) {
+	b := NewBuilder(Options{ValLen: 1})
+	for _, s := range []string{"::ffff:10.0.0.1", "::ffff:0.0.0.0", "::ffff:255.255.255.255"} {
+		if err := b.Add(netip.MustParseAddr(s), []byte{7}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := m.Stats(); st.Addrs4 != 3 || st.Addrs6 != 0 {
+		t.Fatalf("mapped spellings landed in the wrong family: %+v", st)
+	}
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := openBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("an artifact built from mapped spellings was refused: %v", err)
+	}
+	for _, s := range []string{"::ffff:10.0.0.1", "10.0.0.1", "0.0.0.0", "::ffff:255.255.255.255"} {
+		if v, ok := opened.Lookup(netip.MustParseAddr(s)); !ok || !bytes.Equal(v, []byte{7}) {
+			t.Fatalf("Lookup(%s) = %v, %v", s, v, ok)
+		}
+	}
+}
+
 // Close is documented idempotent, concurrent calls included: racing Closes on
 // one Map must neither double-release nor call through a half-cleared field.
 // The teeth are the -race pass — a bare nil-check here was a demonstrated
