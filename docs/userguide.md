@@ -152,9 +152,9 @@ with `SIGSEGV` rather than a recoverable panic. See `Close`, above.
 
 **Platforms.** `Open` memory-maps the artifact on unix, so an artifact may exceed RAM and the
 kernel pages it in as lookups touch it. Elsewhere — Windows — there is no mapping: `Open` reads
-the file into memory, so the artifact must fit. Everything else behaves identically, the
-verification included. A 64-bit platform is required; the package refuses to
-compile where `int` is 32 bits.
+the file into memory, so the artifact must fit, and `Close` releases nothing. The verification
+and the answers are identical. A 64-bit platform is required; the package refuses to compile
+where `int` is 32 bits.
 
 ### Errors from `Open`
 
