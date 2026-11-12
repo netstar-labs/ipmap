@@ -22,6 +22,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,28 @@ import (
 )
 
 // version is stamped at link time by build/ipmap (-X main.version). It stays
-// "dev" for a plain `go build`, which is the honest answer for one.
+// "dev" when nothing stamped it and the toolchain recorded no module version
+// either; see buildVersion.
 var version = "dev"
+
+// readBuildInfo is debug.ReadBuildInfo, held in a variable so a test can
+// supply the module version a `go install` would have embedded.
+var readBuildInfo = debug.ReadBuildInfo
+
+// buildVersion is what `ipmap version` reports. A -X stamp always wins. Absent
+// one, the module version the Go toolchain embedded is the honest answer — it
+// is the tag for `go install ...@v0.2.0`, and a VCS-derived pseudo-version for
+// a build inside a checkout — and "(devel)" or an empty version means the
+// toolchain had nothing to say, so "dev" stands.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := readBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -55,7 +76,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "stats":
 		err = stats(args[1:], stdout, stderr)
 	case "version", "-version", "--version":
-		_, err = fmt.Fprintln(stdout, version)
+		_, err = fmt.Fprintln(stdout, buildVersion())
 	case "help", "-h", "--help":
 		usage(stderr)
 		return 2

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -452,6 +453,33 @@ func TestSubcommandHelpExitsTwo(t *testing.T) {
 		}
 		if strings.Contains(errs, "help requested") || strings.Contains(errs, "ipmap:") {
 			t.Errorf("%s -h: stderr %q carries an error line for a help request", cmd, errs)
+		}
+	}
+}
+
+// A binary from `go install ...@v0.2.0` is not stamped with -X, yet the module
+// version is embedded in its build info; reporting "dev" for it would hide
+// exactly the release a bug report needs. The -X stamp, when present, wins.
+func TestVersionFromBuildInfo(t *testing.T) {
+	oldRead, oldVersion := readBuildInfo, version
+	defer func() { readBuildInfo, version = oldRead, oldVersion }()
+
+	for _, tc := range []struct {
+		name, stamped string
+		info          *debug.BuildInfo // nil: no build info at all
+		want          string
+	}{
+		{"go install", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"}}, "v0.2.0"},
+		{"stamp wins", "v9.9.9-stamped", &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"}}, "v9.9.9-stamped"},
+		{"devel", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, "dev"},
+		{"empty", "dev", &debug.BuildInfo{}, "dev"},
+		{"unavailable", "dev", nil, "dev"},
+	} {
+		version = tc.stamped
+		readBuildInfo = func() (*debug.BuildInfo, bool) { return tc.info, tc.info != nil }
+		code, out, errs := exec(t, "", "version")
+		if code != 0 || strings.TrimSpace(out) != tc.want {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want %q", tc.name, code, out, errs, tc.want)
 		}
 	}
 }

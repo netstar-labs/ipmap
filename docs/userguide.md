@@ -7,7 +7,8 @@
 
 ```sh
 go get github.com/netstar-labs/ipmap        # the library
-go build -o ipmap ./app/ipmap               # the CLI — `ipmap version` then says "dev"
+go install github.com/netstar-labs/ipmap/app/ipmap@latest   # the CLI — `ipmap version` says the module version
+go build -o ipmap ./app/ipmap               # from a checkout: the VCS version Go embeds, else "dev"
 build/ipmap                                 # or the tracked script: stamps the git version
 ```
 
