@@ -350,6 +350,25 @@ func TestFlagErrorsUseInjectedStderr(t *testing.T) {
 	}
 }
 
+// Asking for help is not a failure of the invocation, and the code's
+// convention is that help exits 2 — as top-level `ipmap -h` does. The flag
+// package has already printed the subcommand's usage; run must not follow it
+// with an "ipmap: flag: help requested" line.
+func TestSubcommandHelpExitsTwo(t *testing.T) {
+	for _, cmd := range []string{"build", "lookup", "verify", "stats"} {
+		code, out, errs := exec(t, "", cmd, "-h")
+		if code != 2 || out != "" {
+			t.Errorf("%s -h: exit %d, stdout %q; want exit 2 and no stdout", cmd, code, out)
+		}
+		if !strings.Contains(errs, "Usage of "+cmd+":") {
+			t.Errorf("%s -h: stderr %q lacks the usage banner", cmd, errs)
+		}
+		if strings.Contains(errs, "help requested") || strings.Contains(errs, "ipmap:") {
+			t.Errorf("%s -h: stderr %q carries an error line for a help request", cmd, errs)
+		}
+	}
+}
+
 func TestUsageAndUnknown(t *testing.T) {
 	if code, _, errs := exec(t, ""); code != 2 || !strings.Contains(errs, "usage:") {
 		t.Fatalf("no-args: exit %d, %q", code, errs)

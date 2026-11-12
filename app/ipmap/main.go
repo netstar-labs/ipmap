@@ -62,6 +62,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		usage(stderr)
 		return 2
 	}
+	// A subcommand's -h is help, not failure: exit 2 like top-level help does.
+	// The flag package has already printed the usage to stderr, so a further
+	// "ipmap: flag: help requested" line would only be noise.
+	if errors.Is(err, flag.ErrHelp) {
+		return 2
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "ipmap:", err)
 		return 1
