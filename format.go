@@ -281,23 +281,27 @@ func openBytes(data []byte) (*Map, error) {
 	for i := 0; i < numSections; i++ {
 		at := 80 + i*24
 		o, l := le.Uint64(data[at:]), le.Uint64(data[at+8:])
-		padEnd := o + uint64(pad8(int(l)))
+		// The padded end, in uint64 throughout: l is a length taken from the
+		// file, and no conversion to int may touch it. (& binds tighter than +,
+		// so this is o + ((l+7) &^ 7).) A wrap here needs l within 7 of 2^64,
+		// which the l != expect[i] test below has already refused.
+		end := o + (l+7)&^7
 		// The padded end is the bound that matters: the padding bytes are read
 		// below, so a file truncated inside a section's padding must die here,
 		// not as a slice panic. (Found by the corruption corpus, not foreseen.)
-		if l != expect[i] || o != off || o%8 != 0 || padEnd < o || padEnd > uint64(len(data)) {
+		if l != expect[i] || o != off || o%8 != 0 || end < o || end > uint64(len(data)) {
 			return nil, fmt.Errorf("section %d geometry: %w", i, ErrCorrupt)
 		}
 		secs[i] = data[o : o+l : o+l]
 		if crc32.ChecksumIEEE(secs[i]) != le.Uint32(data[at+16:]) {
 			return nil, fmt.Errorf("section %d checksum: %w", i, ErrCorrupt)
 		}
-		for _, p := range data[o+l : o+uint64(pad8(int(l)))] {
+		for _, p := range data[o+l : end] {
 			if p != 0 {
 				return nil, fmt.Errorf("section %d padding: %w", i, ErrCorrupt)
 			}
 		}
-		off += uint64(pad8(int(l)))
+		off = end
 	}
 	if off != uint64(len(data)) {
 		return nil, fmt.Errorf("trailing bytes: %w", ErrCorrupt)
