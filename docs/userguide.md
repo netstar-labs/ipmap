@@ -9,7 +9,7 @@
 go get github.com/netstar-labs/ipmap        # the library
 go install github.com/netstar-labs/ipmap/app/ipmap@latest   # the CLI — `ipmap version` says the module version
 go build -o ipmap ./app/ipmap               # from a checkout: the VCS version Go embeds, else "dev"
-build/ipmap                                 # or the tracked script: stamps the git version
+build/ipmap                                 # the tracked script: a linux/amd64 package under build/install/
 ```
 
 Go 1.27 or newer. No dependencies outside the standard library.
