@@ -239,7 +239,7 @@ func openBytes(data []byte) (*Map, error) {
 	confl := le.Uint64(data[72:])
 
 	switch {
-	case valLen < 1 || valLen > maxValLen:
+	case valLen < 1 || valLen > MaxValLen:
 		return nil, fmt.Errorf("value width %d: %w", valLen, ErrCorrupt)
 	case n4 > math.MaxUint32 || n6 > math.MaxUint32 || np > n6,
 		n6 > 0 && np == 0,

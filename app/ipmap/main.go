@@ -181,6 +181,11 @@ func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
 			if len(val) == 0 {
 				return nil, fmt.Errorf("%s:%d: empty value", name, lineNo)
 			}
+			// NewBuilder panics on a width it cannot serve; operator input
+			// must get an error with a line number, not a goroutine trace.
+			if len(val) > ipmap.MaxValLen {
+				return nil, fmt.Errorf("%s:%d: value is %d bytes, limit is %d", name, lineNo, len(val), ipmap.MaxValLen)
+			}
 			b = ipmap.NewBuilder(ipmap.Options{ValLen: len(val), Intern: intern})
 		}
 		if err := b.Add(addr, val); err != nil {

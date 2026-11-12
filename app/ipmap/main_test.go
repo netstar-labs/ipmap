@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/netstar-labs/ipmap"
 )
 
 // exec runs the real command path — run(), not a parallel reimplementation —
@@ -107,6 +109,7 @@ func TestBuildErrorsCarryLineNumbers(t *testing.T) {
 		{"wrong width", "1.2.3.4 aabb\n5.6.7.8 aa\n", ":2:"},
 		{"three fields", "1.2.3.4 aa bb\n", ":1:"},
 		{"empty spec", "# nothing\n", "no entries"},
+		{"value too wide", "1.2.3.4 " + strings.Repeat("ab", ipmap.MaxValLen+1) + "\n", ":1: value is 4097 bytes, limit is 4096"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp := filepath.Join(dir, "s.spec")
@@ -118,6 +121,24 @@ func TestBuildErrorsCarryLineNumbers(t *testing.T) {
 				t.Fatalf("exit %d, stderr %q; want exit 1 containing %q", code, errs, tc.want)
 			}
 		})
+	}
+}
+
+// The widest legal value still builds: the limit is inclusive, and the check
+// that rejects 4097 bytes must not have moved the boundary.
+func TestBuildMaxWidthValue(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "s.spec")
+	body := "1.2.3.4 " + strings.Repeat("ab", ipmap.MaxValLen) + "\n"
+	if err := os.WriteFile(sp, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "o")
+	if code, _, errs := exec(t, "", "build", "-in", sp, "-out", db); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("verify exit %d: %s", code, errs)
 	}
 }
 
@@ -254,6 +275,7 @@ func FuzzSpecParse(f *testing.F) {
 	f.Add([]byte("not-an-address zz\n"))
 	f.Add([]byte("1.2.3.4 \n"))
 	f.Add([]byte("1.2.3.4\x00aa\n\xff\xfe"))
+	f.Add([]byte("1.2.3.4 " + strings.Repeat("ab", 4097) + "\n")) // wider than NewBuilder allows
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<16 {
 			return
