@@ -15,7 +15,7 @@ than a description.
 trust, and a lookup on an opened map is meant never to read outside it. In scope:
 
 - a file `Open` accepts and then answers incorrectly from, or crashes on
-- an input that makes the spec reader, the address parser or `Builder` panic, hang, or silently
+- an input that makes the spec reader, the CLI's address handling or `Builder` panic, hang, or silently
   drop or alter an entry
 - a lookup that reads out of bounds, or allocates
 
