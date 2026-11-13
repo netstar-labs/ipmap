@@ -3,6 +3,15 @@
 The artifact format is frozen at version 1. The Go API is v0.x: stable in practice, not yet
 promised. Newest first.
 
+## v0.3.1
+
+**Changed**
+
+- Remove the unexported byte-slice address parsers (`parseAddr4`, `parseAddr6`) and their helpers,
+  which nothing but tests called. `netip.ParseAddr` is allocation-free on a string and faster on
+  v6, and wiring the parsers in would have needed new exported API for about 10% on v4 builds
+  only (#38). No exported API or behaviour changes.
+
 ## v0.3.0
 
 Fixes from the second adversarial audit (#31–#37). v0.2.1 was never tagged; its entries are folded

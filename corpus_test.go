@@ -215,14 +215,8 @@ func scan(t *testing.T, path string, fn func(line []byte)) {
 	}
 }
 
-// parseAny routes a line to whichever family parser matches its syntax.
+// parseAny parses a feed line with the standard library.
 func parseAny(b []byte) (netip.Addr, bool) {
-	for _, c := range b {
-		if c == ':' {
-			a, ok := parseAddr6(b)
-			return a.addr(), ok
-		}
-	}
-	ip, ok := parseAddr4(b)
-	return v4addr(ip), ok
+	a, err := netip.ParseAddr(string(b))
+	return a, err == nil
 }
