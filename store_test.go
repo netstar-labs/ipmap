@@ -214,6 +214,7 @@ func TestDuplicateRule(t *testing.T) {
 	for _, opt := range []Options{{ValLen: 1}, {ValLen: 1, Intern: true}} {
 		t.Run(map[bool]string{false: "direct", true: "interned"}[opt.Intern], func(t *testing.T) {
 			testDuplicateRule(t, opt)
+			testDuplicateRule6(t, opt)
 		})
 	}
 }
@@ -264,6 +265,37 @@ func testDuplicateRule(t *testing.T, opt Options) {
 	// six's dropped 7 conflicts with its survivor 8.
 	if st.DupConflicts != 4 {
 		t.Fatalf("DupConflicts = %d, want 4", st.DupConflicts)
+	}
+}
+
+// The same survivor rule on one 128-bit address added four times with values
+// 1, 1, 2, 3, alone in its map so the counts are exact. The survivor is 3, so
+// all three drops conflict (1, 1, 2 against 3). Measured against the next add
+// in line instead, the pairs (1,1), (1,2), (2,3) would give 2 — and the 32-bit
+// family's version of this test would still pass, because build6 carries its
+// own copy of the rule.
+func testDuplicateRule6(t *testing.T, opt Options) {
+	t.Helper()
+	b := NewBuilder(opt)
+	a := netip.MustParseAddr("2001:db8::1234")
+	for _, v := range []byte{1, 1, 2, 3} {
+		if err := b.Add(a, []byte{v}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := b.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := m.Lookup(a); !bytes.Equal(got, []byte{3}) {
+		t.Fatalf("128-bit last-wins broken: %x", got)
+	}
+	st := m.Stats()
+	if st.Addrs6 != 1 || st.Dups != 3 {
+		t.Fatalf("128-bit Addrs6/Dups = %d/%d, want 1/3", st.Addrs6, st.Dups)
+	}
+	if st.DupConflicts != 3 {
+		t.Fatalf("128-bit DupConflicts = %d, want 3 (every drop against the survivor)", st.DupConflicts)
 	}
 }
 

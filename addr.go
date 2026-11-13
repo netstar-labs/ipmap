@@ -1,6 +1,9 @@
 package ipmap
 
-import "net/netip"
+import (
+	"encoding/binary"
+	"net/netip"
+)
 
 // The address model. Each family gets the representation its arithmetic wants:
 // a 32-bit address is a uint32, where comparison and successor are single
@@ -8,12 +11,16 @@ import "net/netip"
 // words ordered by (hi, lo), so sorting and comparing never touch wide
 // arithmetic.
 //
-// The parsers exist because the build path reads addresses from byte slices at
-// feed scale, and netip.ParseAddr takes a string — one allocation per address
-// is billions per build. They are differential-tested against net/netip rather
-// than against hand-written expectations: for any input, each parser accepts
-// exactly when the standard library accepts (zone-free inputs), and produces
-// byte-identical addresses when both do.
+// parseAddr4 and parseAddr6 are unexported, allocation-free parsers over byte
+// slices, kept for a build path that reads addresses from a feed as bytes:
+// netip.ParseAddr takes a string, so a byte-slice feed would pay a conversion
+// per address, billions per build. No production code calls them yet —
+// Builder.Add takes a netip.Addr and the CLI parses with netip.ParseAddr — so
+// today only tests use them, the corpus reader in corpus_test.go among them.
+// They are differential-tested against net/netip rather than against
+// hand-written expectations: for any input, each parser accepts exactly when
+// the standard library accepts (zone-free inputs), and produces byte-identical
+// addresses when both do.
 
 // addr6 is a 128-bit address as two host-order words, high first. Ordering by
 // (hi, lo) equals numeric address order, and both words fit machine registers.
@@ -46,12 +53,7 @@ func (a addr6) addr() netip.Addr {
 // is a valid 16-byte address; a 4-byte address must be mapped first.
 func addr6Of(a netip.Addr) addr6 {
 	b := a.As16()
-	var r addr6
-	for i := 0; i < 8; i++ {
-		r.hi = r.hi<<8 | uint64(b[i])
-		r.lo = r.lo<<8 | uint64(b[8+i])
-	}
-	return r
+	return addr6{hi: binary.BigEndian.Uint64(b[:8]), lo: binary.BigEndian.Uint64(b[8:])}
 }
 
 // parseAddr4 parses a dotted quad without allocating. It accepts exactly what

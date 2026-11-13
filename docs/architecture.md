@@ -145,7 +145,8 @@ probe into a group that holds nothing (the index answers, nothing is scanned) an
 populated group (scanned or binary-searched, then absent). Only the second can degrade with
 density, so averaging them would hide the curve this sweep exists to draw.
 
-**Lookups** (ns/op; every path 0 B/op, 0 allocs/op — R7 asserted at every point):
+**Lookups** (ns/op; every path 0 B/op, 0 allocs/op reported at every point;
+asserted by the `AllocsPerRun` tests):
 
 | | 1× | 4× | 10× |
 |---|---|---|---|

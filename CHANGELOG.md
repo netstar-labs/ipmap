@@ -3,7 +3,7 @@
 The artifact format is frozen at version 1. The Go API is v0.x: stable in practice, not yet
 promised. Newest first.
 
-## v0.2.1
+## Unreleased
 
 - Add `SECURITY.md` (private reporting), `CONTRIBUTING.md` and this changelog.
 - Raise the minimum Go version to 1.27 (`go.mod`, README, user guide, roadmap), and the CI

@@ -24,9 +24,18 @@ No phase is done until this is green, and **a failing required check is not waiv
 
 ```sh
 export GOWORK=off
-go build ./... && go vet ./... && staticcheck ./... && \
-  deadcode -test ./... && test -z "$(gofmt -l .)" && go test -race ./...
+go build ./... && go vet ./...
+GOOS=windows go build ./... && GOOS=windows go vet ./...
+GOOS=linux GOARCH=s390x go build ./...
+go test ./... && go test -race ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+test -z "$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...)"
+test -z "$(gofmt -l .)"
 ```
+
+This is `.github/workflows/ci.yml` line for line. `deadcode` exits 0 even when it finds dead
+code, so the gate is that its report is empty, not its exit status; and the tools are pinned
+because a gate that can start failing with no change in the repo is not a gate.
 
 ---
 
@@ -42,7 +51,7 @@ Invariants, not phase criteria. A change that needs one relaxed is the wrong cha
 | **R4** | **No non-public content in the repo or its history** | Test data is synthetic or generated. Large real-world corpora are local-only and gitignored. Audited against the full history, not `HEAD` — a public repo's history is public too |
 | **R5** | **Every parser is fuzzed against an oracle** | Hand-rolled address parsing is where silent wrong answers live |
 | **R6** | **A format change is a version bump plus a refusal path** | A reader that guesses at an unknown version is worse than one that refuses |
-| **R7** | **Zero allocation on every query path** | Asserted by benchmark, not by inspection |
+| **R7** | **Zero allocation on every query path** | Asserted by `testing.AllocsPerRun` tests (`TestLookupZeroAlloc`, `TestInternZeroAlloc`, `TestParseAddrZeroAlloc`, `bits.TestZeroAlloc`), not by inspection |
 
 ---
 
@@ -54,7 +63,7 @@ it guards.
 | | Hazard | The test that catches it |
 |---|---|---|
 | **T1** | A getter masking wider than its field silently returns its neighbours' bits | Saturate every field to full width, read each back. Catches the class, not an instance |
-| **T2** | A closure capturing an error variable escapes to the heap — allocations per row, billions per build | `ReportAllocs` on every hot path, asserted at zero |
+| **T2** | A closure capturing an error variable escapes to the heap — allocations per row, billions per build | `AllocsPerRun` on every hot path, asserted at zero |
 | **T3** | `size<<1` overflows at the top of the address space, so a whole-space range miscounts | Explicit boundary cases: first address, last address, `/0`, single-entry and full groups |
 | **T4** | Duplicate keys carrying **conflicting** values occur in real inputs. A rank-based index cannot represent a key twice and silently misaligns every entry after the first | The builder defines, tests and *reports* a conflict rule. Duplicates are counted, never silently dropped |
 | **T5** | A 20,000-key sample passed a structure that was wrong for 45 keys out of 10⁸ — a 0.04% chance of catching it | Oracle tests iterate **every** key |
@@ -75,18 +84,17 @@ Every item is a gate on the phase that introduces it and a permanent regression 
 | `TestFieldsAreIndependent` | clearing one field disturbs no other | P1 |
 | `TestSettersOverwrite` | setters clear before writing; a second write replaces | P1 |
 | `TestOversizedValueDoesNotSpill` | a too-wide value truncates, never spills upward | P1 |
-| `TestLookupExhaustive` | **every** key resolves to its own value — run per family (T5) | P3 |
-| `TestLookupAgainstLinearScan` | the structure and a naive reference agree on every key, per family | P3 |
+| `TestLookupExhaustive` | **every** key resolves to its own value, checked against a Go-map oracle, both families in one run (T5) | P3 |
 | `TestBoundaryAddresses` | T3 — first, last, below-first, above-last, in-gap, empty group, single-entry group, full group | P3 |
-| `TestDuplicateKeyRule` | T4 — conflicting duplicates resolve deterministically and are counted | P3 |
+| `TestDuplicateRule` | T4 — conflicting duplicates resolve deterministically and are counted | P3 |
 | `TestInternedMatchesUninterned` | identical answers for every key, both build modes, both families | P4 |
-| `TestIDWidthOverflowFails` | exceeding the id space fails loudly at build, not at query | P4 |
-| `TestRoundTripByteIdentical` | build → write → open → re-write is byte-equal | P5 |
-| `TestRefusesUnknownVersion` | R6 | P5 |
-| `TestRefusesCorruptArtifact` | T7 — the full corruption corpus | P5 |
-| `TestZeroCopyLookup` | the returned value aliases the mapping | P5 |
-| `TestBothFamiliesOneArtifact` | one file holds both; opening routes by family | P5 |
-| `TestCLIGolden` | human and `-json` output, per subcommand, both families | P6 |
+| `TestPutIDOverflowPanics` | exceeding the id space fails loudly at build, not at query | P4 |
+| `TestArtifactRoundTrip` | build → write → open → re-write is byte-equal | P5 |
+| `TestCorruptionCorpus` | R6 and T7 — every member of the corpus refused with the right error, unknown versions included | P5 |
+| `TestOpenMutational` | T7 — seeded random mutations of real artifacts never panic and anything accepted re-serialises byte-identically | P5 |
+| `TestOpenedLookupAliasesMapping` | the returned value aliases the mapping | P5 |
+| `TestArtifactRoundTrip` / `TestArtifactSingleFamilyAndEmpty` | one file holds both families, or only one, or neither; opening routes by family | P5 |
+| `TestLookupGolden` / `TestVerifyGolden` / `TestStatsGolden` | human and `-json` output, per subcommand, both families | P6 |
 
 ### Differential — against `net/netip` as oracle
 
@@ -95,7 +103,7 @@ Every item is a gate on the phase that introduces it and a permanent regression 
 | `TestParseAddrMatchesNetip` | ≥100k canonical addresses per family, byte-identical (R5, T6) | P2 |
 | `TestParseAddrRejects` | malformed inputs the oracle rejects | P2 |
 | `TestOrderMatchesNetip` | internal ordering equals `Addr.Less` over random pairs | P2 |
-| `TestNextAcrossWordBoundary` | successor arithmetic carries correctly | P2 |
+| `TestNextMatchesNetip` | successor arithmetic carries correctly | P2 |
 
 ### Fuzz — each with a stated budget, corpus committed
 
@@ -125,15 +133,16 @@ but absent from the body.
 ## Benchmark inventory
 
 All report `ns/op`, `B/op`, `allocs/op`. **Allocations are asserted at zero on every query path
-(R7)**; a benchmark that reports non-zero is a failing test, not a note.
+(R7)** — by the `AllocsPerRun` tests (`TestLookupZeroAlloc`, `TestInternZeroAlloc`,
+`TestParseAddrZeroAlloc`, `bits.TestZeroAlloc`), not by the benchmarks, which only report them.
 
 | Benchmark | Reports | Phase |
 |---|---|---|
 | `BenchmarkBitsGetSet` | the codec's own cost | P1 |
-| `BenchmarkParseAddr` | ns/op and MB/s, per family | P2 |
+| `BenchmarkParseAddr4` / `BenchmarkParseAddr6` | ns/op and MB/s, per family | P2 |
 | `BenchmarkLookupHit` / `BenchmarkLookupMiss` | hit and miss measured **separately**, per family — they diverge by an order of magnitude and an average hides both | P3 |
-| `BenchmarkBuild` | wall clock **and peak RSS**, phased: parse · sort · emit, per family | P3 |
-| `BenchmarkOpen` | mmap plus verification cost at full size | P5 |
+| `BenchmarkBuild` | ns/op and allocs for a 200k-entry build, per family — peak RSS is `TestBuildMemoryCurve`, and the add/build split is `BenchmarkScale` | P3 |
+| `BenchmarkOpen` | mmap plus verification cost, at 200k entries rather than full size | P5 |
 | Scale sweep | every lookup and build benchmark at **1×, 4×, 10×**, both families | P8 |
 
 **Benchmarks must be run against a realistic distribution, not a uniform one.** Uniformly random
@@ -160,19 +169,20 @@ improvised one.
 
 **Exit.**
 - House scaffold: module `github.com/netstar-labs/ipmap`, **Go 1.25** at the scaffold (matching the
-  sibling library, so depending on `ipmap` never forced a consumer's toolchain bump), raised to **Go 1.27** at v0.2.1 · root package *is*
+  sibling library, so depending on `ipmap` never forced a consumer's toolchain bump), raised to **Go 1.26** for the first release (v0.1.0) and to **Go 1.27** after v0.2.0 · root package *is*
   the library · `app/ipmap/` for the CLI · `pkg/bits/` for sub-packages.
 - **No `LICENSE`, no `NOTICE`, no per-file headers.** House standard: a private repo is
   unlicensed — all rights reserved — and the licence is added at go-public, not before. Per-file
   copyright lines are never added at all.
-- `.gitignore` covering `sandbox/`, `testdata/` and `docs/plan/` — **verified before the first
-  commit**, because the corpora are already in the working tree.
+- `.gitignore` covering `sandbox/` and `docs/plan/` — **verified before the first
+  commit**, because the corpora are already in the working tree. `testdata/` is *not* ignored: it
+  is committed, and holds the fuzz corpora.
 - A **large-blob guard in CI**: reject any blob over a size threshold. `.gitignore` does not stop
   `git add -f`, and R4 is about the history, which is expensive to fix after a repo is public.
 - The required doc set written as **real content, not stubs** — `README.md`, `docs/introduction.md`,
   `docs/executive-summary.md`, `docs/architecture.md`, `docs/userguide.md`, `example/README.md`.
   They will be wrong in places until the code exists; P9 verifies them rather than writes them.
-- `ci.yml` runs the standing gate on every push and PR · `pr-issue-link.yml` enforces that every
+- `ci.yml` runs the standing gate on every PR and on pushes to `main` · `pr-issue-link.yml` enforces that every
   PR closes an issue.
 - `CODEOWNERS` routes review to `the-laboratory`. **Branch protection is deferred**: the R&D head
   is the gate today, and protection only starts doing work when there is a second contributor —
@@ -204,8 +214,8 @@ orderings differ.*
 **Goal.** Build and lookup for **both** families. Two different structures behind one interface;
 no file format yet.
 **Exit.** Each family independently passes: an **exhaustive** oracle over generated *and* large
-real-world input, every key resolving to its own value (T5) · agreement with a linear-scan
-reference on every key · the boundary set — first, last, below-first, above-last, in-gap, empty
+real-world input, every key resolving to its own value (T5) · agreement with an independent
+reference (a Go map) on every key · the boundary set — first, last, below-first, above-last, in-gap, empty
 group, single-entry group, full group (T3) · the duplicate-key rule, defined, tested and counted
 (T4) · zero-allocation lookup (R7, T2).
 **The phase does not exit until both families pass.** A green 32-bit store is not a milestone on
@@ -279,7 +289,7 @@ answer. Recorded so the next developer inherits the analysis, not just the absen
 
 | Lever | Buys | Take it when |
 |---|---|---|
-| **Partitioned external merge sort** in Build | builds past the in-memory boundary — sequential merge runs, *not* mmap'd scratch, which thrashes under random-access sorting | input approaches ~11M 128-bit entries per GB of build-host RAM at ValLen 4 (the measured model: peak ≈ 1.4·(35+2V)·n); today's largest feed is ~5× under it on a 32 GB host |
+| **Partitioned external merge sort** in Build | builds past the in-memory boundary — sequential merge runs, *not* mmap'd scratch, which thrashes under random-access sorting | input approaches ~11M 128-bit entries per GB of build-host RAM at ValLen 4 (the measured model: peak ≈ 1.4·(35+2V)·n = 60 B/entry, so 16.6M entries per GB of peak, and ⅔ of that, 11M, is the budget the sizing rule allows); today's largest feed (193.3M 128-bit entries) is ~1.8× under it on a 32 GB host: 11M × 32 ≈ 354M, 354M / 193.3M ≈ 1.8, before counting the caller's own input |
 | **Parallel sort** in Build | ~4–5× off the sort half (26.7 s at 100M 128-bit entries, single-threaded today) | build latency matters operationally — it is once-per-artifact now |
 | **Per-/24 occupancy bitmap** (popcount instead of scan) | the 32-bit populated-group miss | that path degrades meaningfully — measured 151→177 ns across a 10× sweep, so not yet |
 | **Huge pages / TLB relief** for multi-GB maps | the hit path's cache drift (140→207 ns over 10×) | a consumer runs latency-sensitive at ≥10⁸ entries; platform-specific |
