@@ -183,6 +183,25 @@ func TestBadDeclarationsPanic(t *testing.T) {
 	expectPanic("width over 64", func() { var l Layout; l.Field(65) })
 	expectPanic("total over 64", func() { var l Layout; l.Field(60); l.Field(5) })
 	expectPanic("reserve over 64", func() { var l Layout; l.Field(60); l.Reserve(5) })
+
+	// The overflow checks must not wrap: a width near the top of uint, such as
+	// the result of an underflowing subtraction, once made used+width wrap
+	// past zero and slip through.
+	expectPanic("reserve wraps", func() { var l Layout; l.Field(8); l.Reserve(^uint(0)) })
+	expectPanic("field wraps after 8", func() { var l Layout; l.Field(8); l.Field(^uint(0)) })
+	expectPanic("field wraps after 1", func() { var l Layout; l.Field(1); l.Field(^uint(0)) })
+	expectPanic("field after full word", func() { var l Layout; l.Field(64); l.Field(1) })
+}
+
+// A full word leaves no room for a field but a zero-width reserve is still a
+// harmless, legal declaration.
+func TestReserveZeroOnFullWord(t *testing.T) {
+	var l Layout
+	l.Field(64)
+	l.Reserve(0)
+	if l.Used() != 64 {
+		t.Fatalf("Used = %d, want 64", l.Used())
+	}
 }
 
 // Get and Put must not allocate: they run on hot paths millions of times.

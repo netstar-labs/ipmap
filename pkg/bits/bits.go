@@ -19,8 +19,9 @@
 //	)
 //
 // Fields are allocated from bit 0 upward. A declaration that cannot fit —
-// a zero width, or a total past 64 bits — panics at declaration time, which
-// for a package-level layout means at init, loudly, in every test run.
+// a zero-width Field, or a total past 64 bits — panics at declaration time,
+// which for a package-level layout means at init, loudly, in every test run.
+// (Reserve(0) is accepted: it allocates nothing and is harmless.)
 //
 // Why it ships with ipmap: the store holds opaque fixed-width values and never
 // interprets them, so packing structure into those bytes is the caller's job —
@@ -46,7 +47,8 @@ func (l *Layout) Field(width uint) Field {
 	if width == 0 {
 		panic("bits: zero-width field")
 	}
-	if l.used+width > 64 {
+	// used <= 64 always, so 64-used cannot underflow; used+width could wrap.
+	if width > 64-l.used {
 		panic(fmt.Sprintf("bits: layout overflows a 64-bit word: %d used + %d wanted", l.used, width))
 	}
 	f := Field{shift: l.used, width: width}
@@ -58,7 +60,8 @@ func (l *Layout) Field(width uint) Field {
 // gap is a declaration rather than an accident. It returns the reserved width
 // purely so a declaration can bind it to the blank identifier.
 func (l *Layout) Reserve(width uint) uint {
-	if l.used+width > 64 {
+	// used <= 64 always, so 64-used cannot underflow; used+width could wrap.
+	if width > 64-l.used {
 		panic(fmt.Sprintf("bits: reserve overflows a 64-bit word: %d used + %d wanted", l.used, width))
 	}
 	l.used += width
