@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"slices"
 	"time"
 	"unsafe"
 )
@@ -280,23 +281,27 @@ func openBytes(data []byte) (*Map, error) {
 	for i := 0; i < numSections; i++ {
 		at := 80 + i*24
 		o, l := le.Uint64(data[at:]), le.Uint64(data[at+8:])
-		padEnd := o + uint64(pad8(int(l)))
+		// The padded end, in uint64 throughout: l is a length taken from the
+		// file, and no conversion to int may touch it. (& binds tighter than +,
+		// so this is o + ((l+7) &^ 7).) A wrap here needs l within 7 of 2^64,
+		// which the l != expect[i] test below has already refused.
+		end := o + (l+7)&^7
 		// The padded end is the bound that matters: the padding bytes are read
 		// below, so a file truncated inside a section's padding must die here,
 		// not as a slice panic. (Found by the corruption corpus, not foreseen.)
-		if l != expect[i] || o != off || o%8 != 0 || padEnd < o || padEnd > uint64(len(data)) {
+		if l != expect[i] || o != off || o%8 != 0 || end < o || end > uint64(len(data)) {
 			return nil, fmt.Errorf("section %d geometry: %w", i, ErrCorrupt)
 		}
 		secs[i] = data[o : o+l : o+l]
 		if crc32.ChecksumIEEE(secs[i]) != le.Uint32(data[at+16:]) {
 			return nil, fmt.Errorf("section %d checksum: %w", i, ErrCorrupt)
 		}
-		for _, p := range data[o+l : o+uint64(pad8(int(l)))] {
+		for _, p := range data[o+l : end] {
 			if p != 0 {
 				return nil, fmt.Errorf("section %d padding: %w", i, ErrCorrupt)
 			}
 		}
-		off += uint64(pad8(int(l)))
+		off = end
 	}
 	if off != uint64(len(data)) {
 		return nil, fmt.Errorf("trailing bytes: %w", ErrCorrupt)
@@ -336,6 +341,13 @@ func openBytes(data []byte) (*Map, error) {
 	return m, nil
 }
 
+// The low words of the 4-in-6 range ::ffff:0:0 – ::ffff:ffff:ffff, whose high
+// word is zero. validate refuses any 128-bit key inside it.
+const (
+	mappedLo uint64 = 0x0000ffff00000000
+	mappedHi uint64 = 0x0000ffffffffffff
+)
+
 // validate checks every structural invariant the lookup path relies on, so a
 // well-checksummed file from a buggy or hostile writer still cannot produce an
 // out-of-bounds access or a wrong answer.
@@ -359,6 +371,22 @@ func (m *Map) validate() error {
 		// would be a prefix the writer had no reason to list.
 		if err := checkGroups(s.pidx, s.suffix, n, 1, "128-bit"); err != nil {
 			return err
+		}
+		// No key in the 4-in-6 range ::ffff:0:0/96 may live in the 128-bit
+		// store. Add unmaps such a key into the 32-bit family and Lookup unmaps
+		// before it searches, so no Builder writes one and no Lookup reaches
+		// one: an artifact holding it carries an entry the API can never return,
+		// which can also contradict the 32-bit store's value for the same host
+		// while every checksum still passes. The range is hi == 0 and
+		// lo>>32 == 0xffff, one contiguous run inside prefix 0's group — and
+		// the group's order is proven only now, by checkGroups, so the binary
+		// search must come after it.
+		if s.prefix[0] == 0 {
+			seg := s.suffix[s.pidx[0]:s.pidx[1]]
+			i, _ := slices.BinarySearch(seg, mappedLo)
+			if i < len(seg) && seg[i] <= mappedHi {
+				return bad("128-bit key in the 4-in-6 range")
+			}
 		}
 	}
 	if m.interned() {
@@ -387,8 +415,8 @@ func (m *Map) validate() error {
 }
 
 // checkGroups validates one family's group geometry: offsets start at zero and
-// end exactly at n, groups never run backwards or fall below minGroup entries,
-// and suffixes ascend strictly within each group. One function for both
+// end exactly at n, groups never run backwards, past n, or below minGroup
+// entries, and suffixes ascend strictly within each group. One function for both
 // families, so every corruption-corpus case that exercises one family's
 // checking is also proof the other family checks the same way.
 func checkGroups[S uint8 | uint64](idx []uint32, suffix []S, n, minGroup int, family string) error {
@@ -398,7 +426,10 @@ func checkGroups[S uint8 | uint64](idx []uint32, suffix []S, n, minGroup int, fa
 	}
 	for i := 1; i < len(idx); i++ {
 		lo, hi := idx[i-1], idx[i]
-		if hi < lo || int(hi-lo) < minGroup {
+		// hi must be bounded by n before the scan below reads suffix[:hi]: the
+		// final-offset check above proves only the last entry, so a middle one
+		// can be anything. Compared as uint64 so no conversion can truncate it.
+		if hi < lo || uint64(hi) > uint64(n) || int(hi-lo) < minGroup {
 			return bad("group bounds")
 		}
 		for j := lo + 1; j < hi; j++ { // strictly ascending within a group
