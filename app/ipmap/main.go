@@ -19,8 +19,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/netip"
 	"os"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,8 +31,28 @@ import (
 )
 
 // version is stamped at link time by build/ipmap (-X main.version). It stays
-// "dev" for a plain `go build`, which is the honest answer for one.
+// "dev" when nothing stamped it and the toolchain recorded no module version
+// either; see buildVersion.
 var version = "dev"
+
+// readBuildInfo is debug.ReadBuildInfo, held in a variable so a test can
+// supply the module version a `go install` would have embedded.
+var readBuildInfo = debug.ReadBuildInfo
+
+// buildVersion is what `ipmap version` reports. A -X stamp always wins. Absent
+// one, the module version the Go toolchain embedded is the honest answer — it
+// is the tag for `go install ...@v0.2.0`, and a VCS-derived pseudo-version for
+// a build inside a checkout — and "(devel)" or an empty version means the
+// toolchain had nothing to say, so "dev" stands.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := readBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -47,19 +70,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "build":
 		err = build(args[1:], stdin, stderr)
 	case "lookup":
-		err = lookup(args[1:], stdin, stdout)
+		err = lookup(args[1:], stdin, stdout, stderr)
 	case "verify":
-		err = verify(args[1:], stdout)
+		err = verify(args[1:], stdout, stderr)
 	case "stats":
-		err = stats(args[1:], stdout)
+		err = stats(args[1:], stdout, stderr)
 	case "version", "-version", "--version":
-		fmt.Fprintln(stdout, version)
+		_, err = fmt.Fprintln(stdout, buildVersion())
 	case "help", "-h", "--help":
 		usage(stderr)
 		return 2
 	default:
 		fmt.Fprintf(stderr, "ipmap: unknown command %q\n", args[0])
 		usage(stderr)
+		return 2
+	}
+	// A subcommand's -h is help, not failure: exit 2 like top-level help does.
+	// The flag package has already printed the usage to stderr, so a further
+	// "ipmap: flag: help requested" line would only be noise.
+	if errors.Is(err, flag.ErrHelp) {
 		return 2
 	}
 	if err != nil {
@@ -116,25 +145,27 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 		return err
 	}
 
-	// Write to a sibling temp path and rename, so a crash mid-write cannot
-	// leave a half-artifact under the final name — Open would refuse it, but a
-	// name that exists implies a file that serves.
-	tmp := *out + ".tmp"
-	of, err := os.Create(tmp)
+	// Write to a sibling temp path and rename, so a process crash mid-write
+	// cannot leave a half-artifact under the final name — Open would refuse
+	// it, but a name that exists implies a file that serves. The temp name is
+	// unique to this build: concurrent builds to one -out must not share (and
+	// interleave writes into) one file. The deferred Remove covers every error
+	// return, and after a successful rename it finds nothing and is a no-op.
+	// There is deliberately no fsync: the promise is crash safety for the
+	// process, not durability across power loss.
+	tmp, of, err := createTemp(*out)
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tmp)
 	if _, err := m.WriteTo(of); err != nil {
 		of.Close()
-		os.Remove(tmp)
 		return err
 	}
 	if err := of.Close(); err != nil {
-		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, *out); err != nil {
-		os.Remove(tmp)
 		return err
 	}
 	st := m.Stats()
@@ -147,6 +178,29 @@ func build(args []string, stdin io.Reader, stderr io.Writer) error {
 	}
 	fmt.Fprintln(stderr)
 	return nil
+}
+
+// createTemp creates a new file named <out>.<random>.tmp beside out and
+// returns it open for writing. O_EXCL makes the create fail rather than reuse
+// or follow anything already at that name — a symlink planted in a shared
+// directory included — so each build owns its temp file outright; a collision
+// is retried under a fresh suffix. os.CreateTemp is not used because it makes
+// the file 0600, which would silently narrow the artifact's mode from the
+// umask default and lock out readers running as another user. The .tmp suffix
+// is kept because the user guide names it for anything watching the directory.
+func createTemp(out string) (string, *os.File, error) {
+	var err error
+	for range 10 {
+		name := out + "." + strconv.FormatUint(rand.Uint64(), 36) + ".tmp"
+		var f *os.File
+		if f, err = os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666); err == nil {
+			return name, f, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
+	}
+	return "", nil, err
 }
 
 // parseSpec reads the text spec from r into a Builder: one "<address>
@@ -181,6 +235,11 @@ func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
 			if len(val) == 0 {
 				return nil, fmt.Errorf("%s:%d: empty value", name, lineNo)
 			}
+			// NewBuilder panics on a width it cannot serve; operator input
+			// must get an error with a line number, not a goroutine trace.
+			if len(val) > ipmap.MaxValLen {
+				return nil, fmt.Errorf("%s:%d: value is %d bytes, limit is %d", name, lineNo, len(val), ipmap.MaxValLen)
+			}
 			b = ipmap.NewBuilder(ipmap.Options{ValLen: len(val), Intern: intern})
 		}
 		if err := b.Add(addr, val); err != nil {
@@ -196,8 +255,9 @@ func parseSpec(r io.Reader, name string, intern bool) (*ipmap.Builder, error) {
 	return b, nil
 }
 
-func lookup(args []string, stdin io.Reader, stdout io.Writer) error {
+func lookup(args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
+	fs.SetOutput(stderr) // the flag package defaults to os.Stderr, bypassing run's
 	db := fs.String("db", "", "artifact to query")
 	asJSON := fs.Bool("json", false, "one JSON object per line")
 	if err := fs.Parse(args); err != nil {
@@ -213,7 +273,14 @@ func lookup(args []string, stdin io.Reader, stdout io.Writer) error {
 	defer m.Close()
 
 	w := bufio.NewWriter(stdout)
-	defer w.Flush()
+	// A short result sits entirely in the buffer, so a dead stdout surfaces
+	// only here. It must not be swallowed, but it must not mask the error that
+	// ended the loop either.
+	defer func() {
+		if ferr := w.Flush(); err == nil {
+			err = ferr
+		}
+	}()
 	enc := json.NewEncoder(w)
 
 	one := func(raw string) error {
@@ -262,8 +329,9 @@ func lookup(args []string, stdin io.Reader, stdout io.Writer) error {
 // invariant before returning, so an artifact that opens is an artifact that
 // passed. The command exists to give scripts an exit code and a one-line
 // receipt.
-func verify(args []string, stdout io.Writer) error {
+func verify(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	db := fs.String("db", "", "artifact to verify")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -280,13 +348,14 @@ func verify(args []string, stdout io.Writer) error {
 	// The duplicate counts ride along unconditionally: a script comparing two
 	// verify receipts should see the same fields either way, and a duplicate
 	// carrying a different value means the input disagreed with itself.
-	fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d, %d duplicates dropped (%d conflicting)\n",
+	_, err = fmt.Fprintf(stdout, "ok: %d v4 + %d v6 addresses, value width %d, %d duplicates dropped (%d conflicting)\n",
 		st.Addrs4, st.Addrs6, m.ValLen(), st.Dups, st.DupConflicts)
-	return nil
+	return err
 }
 
-func stats(args []string, stdout io.Writer) error {
+func stats(args []string, stdout, stderr io.Writer) (err error) {
 	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	db := fs.String("db", "", "artifact to describe")
 	asJSON := fs.Bool("json", false, "a single JSON object")
 	if err := fs.Parse(args); err != nil {
@@ -315,7 +384,13 @@ func stats(args []string, stdout io.Writer) error {
 		}{st.Addrs4, st.Addrs6, m.ValLen(), st.Distinct > 0, st.Distinct, st.Dups, st.DupConflicts, m.Epoch()})
 	}
 	w := bufio.NewWriter(stdout)
-	defer w.Flush()
+	// Buffered, so the Fprintf errors below are sticky in w and Flush reports
+	// the first of them; returning Flush's error is therefore enough.
+	defer func() {
+		if ferr := w.Flush(); err == nil {
+			err = ferr
+		}
+	}()
 	fmt.Fprintf(w, "addresses     %d v4, %d v6\n", st.Addrs4, st.Addrs6)
 	fmt.Fprintf(w, "value width   %d bytes\n", m.ValLen())
 	if st.Distinct > 0 {

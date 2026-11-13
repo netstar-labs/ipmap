@@ -37,17 +37,20 @@ type entry6 struct {
 	vi uint32
 }
 
-// maxValLen bounds a value's width. The limit is arbitrary but a limit must
+// MaxValLen bounds a value's width. The limit is arbitrary but a limit must
 // exist: ValLen sizes every entry in the artifact, and a wild value here is a
-// misconfiguration, not a use case.
-const maxValLen = 4096
+// misconfiguration, not a use case. NewBuilder panics on a ValLen above it, and
+// Open refuses an artifact that claims a wider value. It is exported so a
+// caller taking the width from input can reject it with an error instead of
+// tripping that panic.
+const MaxValLen = 4096
 
 // NewBuilder returns a Builder for values of exactly opt.ValLen bytes. It
 // panics if the options are structurally invalid — options are program
 // structure, declared once, and a bad declaration must not survive init.
 func NewBuilder(opt Options) *Builder {
-	if opt.ValLen <= 0 || opt.ValLen > maxValLen {
-		panic(fmt.Sprintf("ipmap: ValLen %d is not in 1..%d", opt.ValLen, maxValLen))
+	if opt.ValLen <= 0 || opt.ValLen > MaxValLen {
+		panic(fmt.Sprintf("ipmap: ValLen %d is not in 1..%d", opt.ValLen, MaxValLen))
 	}
 	b := &Builder{opt: opt}
 	if opt.Intern {

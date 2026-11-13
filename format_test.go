@@ -169,7 +169,7 @@ func TestCorruptionCorpus(t *testing.T) {
 			return b
 		}},
 		{"value width over the cap", ErrCorrupt, func(t *testing.T, b []byte) []byte {
-			le().PutUint32(b[16:], maxValLen+1)
+			le().PutUint32(b[16:], MaxValLen+1)
 			fixHeaderCRC(b)
 			return b
 		}},

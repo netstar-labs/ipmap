@@ -3,10 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/netstar-labs/ipmap"
 )
 
 // exec runs the real command path — run(), not a parallel reimplementation —
@@ -58,8 +63,94 @@ func TestBuildReceipt(t *testing.T) {
 	if errs != want {
 		t.Fatalf("receipt:\n got %q\nwant %q", errs, want)
 	}
-	if _, err := os.Stat(db + ".tmp"); !os.IsNotExist(err) {
-		t.Fatal("the temp file survived a successful build")
+	if tmps, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmps) != 0 {
+		t.Fatalf("temp files survived a successful build: %v", tmps)
+	}
+}
+
+// The temp file's name used to be the fixed <out>.tmp, which a pre-planted
+// symlink could redirect: os.Create followed it and the build overwrote
+// whatever it pointed at. A unique name opened with O_EXCL cannot be steered
+// that way, and the planted link must come through untouched.
+func TestBuildDoesNotFollowPlantedTempSymlink(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "in.spec")
+	if err := os.WriteFile(sp, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "victim")
+	const precious = "do not overwrite"
+	if err := os.WriteFile(victim, []byte(precious), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "out.ipmap")
+	if err := os.Symlink(victim, db+".tmp"); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+	if code, _, errs := exec(t, "", "build", "-in", sp, "-out", db); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != precious {
+		t.Fatalf("the symlink target was written through: %q, %v", got, err)
+	}
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("the artifact is not valid: exit %d: %s", code, errs)
+	}
+}
+
+// The artifact's mode is whatever umask leaves of 0666, as os.Create gives.
+// os.CreateTemp would make it 0600 and silently lock out readers running as
+// another user, so the temp file is opened by hand; this pins that choice.
+func TestBuildOutputModeMatchesCreate(t *testing.T) {
+	db := buildArtifact(t)
+	dir := filepath.Dir(db)
+	ref := filepath.Join(dir, "ref")
+	f, err := os.Create(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	want, err := os.Stat(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Stat(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode() != want.Mode() {
+		t.Fatalf("artifact mode %v, os.Create gives %v", got.Mode(), want.Mode())
+	}
+}
+
+// Builds racing to one -out used to share a single temp file: interleaved
+// writes produced corrupt bytes under the final name, and one build's rename
+// stole another's, failing it. With a temp file per build every one succeeds
+// and what lands is a whole artifact.
+func TestConcurrentBuildsToOneOutput(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "in.spec")
+	if err := os.WriteFile(sp, []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "out.ipmap")
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var out, errb bytes.Buffer
+			if code := run([]string{"build", "-in", sp, "-out", db}, strings.NewReader(""), &out, &errb); code != 0 {
+				t.Errorf("concurrent build exited %d: %s", code, errb.String())
+			}
+		}()
+	}
+	wg.Wait()
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("the artifact is not valid: exit %d: %s", code, errs)
+	}
+	if tmps, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmps) != 0 {
+		t.Fatalf("temp files left behind: %v", tmps)
 	}
 }
 
@@ -107,6 +198,7 @@ func TestBuildErrorsCarryLineNumbers(t *testing.T) {
 		{"wrong width", "1.2.3.4 aabb\n5.6.7.8 aa\n", ":2:"},
 		{"three fields", "1.2.3.4 aa bb\n", ":1:"},
 		{"empty spec", "# nothing\n", "no entries"},
+		{"value too wide", "1.2.3.4 " + strings.Repeat("ab", ipmap.MaxValLen+1) + "\n", ":1: value is 4097 bytes, limit is 4096"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp := filepath.Join(dir, "s.spec")
@@ -118,6 +210,24 @@ func TestBuildErrorsCarryLineNumbers(t *testing.T) {
 				t.Fatalf("exit %d, stderr %q; want exit 1 containing %q", code, errs, tc.want)
 			}
 		})
+	}
+}
+
+// The widest legal value still builds: the limit is inclusive, and the check
+// that rejects 4097 bytes must not have moved the boundary.
+func TestBuildMaxWidthValue(t *testing.T) {
+	dir := t.TempDir()
+	sp := filepath.Join(dir, "s.spec")
+	body := "1.2.3.4 " + strings.Repeat("ab", ipmap.MaxValLen) + "\n"
+	if err := os.WriteFile(sp, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "o")
+	if code, _, errs := exec(t, "", "build", "-in", sp, "-out", db); code != 0 {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	if code, _, errs := exec(t, "", "verify", "-db", db); code != 0 {
+		t.Fatalf("verify exit %d: %s", code, errs)
 	}
 }
 
@@ -254,6 +364,7 @@ func FuzzSpecParse(f *testing.F) {
 	f.Add([]byte("not-an-address zz\n"))
 	f.Add([]byte("1.2.3.4 \n"))
 	f.Add([]byte("1.2.3.4\x00aa\n\xff\xfe"))
+	f.Add([]byte("1.2.3.4 " + strings.Repeat("ab", 4097) + "\n")) // wider than NewBuilder allows
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > 1<<16 {
 			return
@@ -279,6 +390,97 @@ func TestVersionCommand(t *testing.T) {
 	}
 	if version == "" {
 		t.Fatal("version is empty: an unstamped build must still say something")
+	}
+}
+
+// failWriter stands in for a stdout that cannot be written: a closed pipe, a
+// full disk, a revoked descriptor.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+// A command whose output never arrived must not report success: a script
+// checking only the exit code would otherwise proceed on an empty result.
+// stats -json is in the list so the one path that already behaved keeps doing so.
+func TestStdoutWriteErrorsExitNonZero(t *testing.T) {
+	db := buildArtifact(t)
+	for _, args := range [][]string{
+		{"lookup", "-db", db, "1.2.3.4"},
+		{"lookup", "-db", db, "-json", "1.2.3.4"},
+		{"stats", "-db", db},
+		{"stats", "-db", db, "-json"},
+		{"verify", "-db", db},
+		{"version"},
+	} {
+		var errb bytes.Buffer
+		code := run(args, strings.NewReader(""), failWriter{}, &errb)
+		if code != 1 || !strings.Contains(errb.String(), "write failed") {
+			t.Errorf("%v: exit %d, stderr %q; want exit 1 naming the write error", args, code, errb.String())
+		}
+	}
+}
+
+// The flag package writes its own diagnostics and usage to the FlagSet's
+// output, which defaults to os.Stderr — not the stderr run was handed. The
+// "ipmap:" line run prints for the returned error also carries the message, so
+// the usage banner is the part that proves where the FlagSet wrote.
+func TestFlagErrorsUseInjectedStderr(t *testing.T) {
+	for _, cmd := range []string{"build", "lookup", "verify", "stats"} {
+		code, out, errs := exec(t, "", cmd, "-bogus")
+		if code != 1 || out != "" {
+			t.Errorf("%s -bogus: exit %d, stdout %q; want exit 1 and no stdout", cmd, code, out)
+		}
+		for _, want := range []string{"flag provided but not defined", "Usage of " + cmd + ":"} {
+			if !strings.Contains(errs, want) {
+				t.Errorf("%s -bogus: injected stderr %q lacks %q", cmd, errs, want)
+			}
+		}
+	}
+}
+
+// Asking for help is not a failure of the invocation, and the code's
+// convention is that help exits 2 — as top-level `ipmap -h` does. The flag
+// package has already printed the subcommand's usage; run must not follow it
+// with an "ipmap: flag: help requested" line.
+func TestSubcommandHelpExitsTwo(t *testing.T) {
+	for _, cmd := range []string{"build", "lookup", "verify", "stats"} {
+		code, out, errs := exec(t, "", cmd, "-h")
+		if code != 2 || out != "" {
+			t.Errorf("%s -h: exit %d, stdout %q; want exit 2 and no stdout", cmd, code, out)
+		}
+		if !strings.Contains(errs, "Usage of "+cmd+":") {
+			t.Errorf("%s -h: stderr %q lacks the usage banner", cmd, errs)
+		}
+		if strings.Contains(errs, "help requested") || strings.Contains(errs, "ipmap:") {
+			t.Errorf("%s -h: stderr %q carries an error line for a help request", cmd, errs)
+		}
+	}
+}
+
+// A binary from `go install ...@v0.2.0` is not stamped with -X, yet the module
+// version is embedded in its build info; reporting "dev" for it would hide
+// exactly the release a bug report needs. The -X stamp, when present, wins.
+func TestVersionFromBuildInfo(t *testing.T) {
+	oldRead, oldVersion := readBuildInfo, version
+	defer func() { readBuildInfo, version = oldRead, oldVersion }()
+
+	for _, tc := range []struct {
+		name, stamped string
+		info          *debug.BuildInfo // nil: no build info at all
+		want          string
+	}{
+		{"go install", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"}}, "v0.2.0"},
+		{"stamp wins", "v9.9.9-stamped", &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"}}, "v9.9.9-stamped"},
+		{"devel", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, "dev"},
+		{"empty", "dev", &debug.BuildInfo{}, "dev"},
+		{"unavailable", "dev", nil, "dev"},
+	} {
+		version = tc.stamped
+		readBuildInfo = func() (*debug.BuildInfo, bool) { return tc.info, tc.info != nil }
+		code, out, errs := exec(t, "", "version")
+		if code != 0 || strings.TrimSpace(out) != tc.want {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want %q", tc.name, code, out, errs, tc.want)
+		}
 	}
 }
 
