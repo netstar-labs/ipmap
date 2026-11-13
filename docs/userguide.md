@@ -1,6 +1,6 @@
 # ipmap — user guide
 
-> **v0.2.0.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
+> **v0.3.0.** The artifact format is frozen at version 1; the Go API is v0.x — stable in
 > practice, not yet promised.
 
 ## Install
